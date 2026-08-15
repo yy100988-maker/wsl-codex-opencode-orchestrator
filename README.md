@@ -48,6 +48,7 @@ flowchart LR
 - **双层内存保护**：同时检查 WSL 内存和 Windows 主机内存，任一侧达到停止阈值就暂停新增任务。
 - **模型回退**：优先使用 `opencode-go/deepseek-v4-flash`，启动失败时只回退一次到 `opencode-go/gpt-5.6-luna`。
 - **自动依赖补齐**：启动时自动安装固定白名单中的 Ubuntu 系统包；不自动修改 OpenCode 认证和模型配置。
+- **快速资源回收**：Supervisor 默认每 30 秒检查一次已完成任务并释放进程、worktree 和 Lease。
 - **分段验收**：要求 handoff、文件范围、任务测试和 Gate 结果全部满足后才允许合并。
 - **可恢复状态**：任务状态、租约、事件、Gate 和报告均保存到项目 `.opencode/` 目录。
 
