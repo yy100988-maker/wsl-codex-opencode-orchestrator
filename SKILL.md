@@ -28,6 +28,12 @@ metadata:
 
 ## 设计与实施入口
 
+- [项目说明 README](README.md)
+- [快速开始](docs/快速开始.md)
+- [配置参考](docs/配置参考.md)
+- [任务协议](docs/任务协议.md)
+- [运行机制](docs/运行机制.md)
+- [故障排查](docs/故障排查.md)
 - [WSL版详细设计文档](C:/Users/y2ksk/.codex/skills/wsl-codex-opencode-orchestrator/详细设计文档.md)
 - [[详细设计文档]]
 - [技能说明](C:/Users/y2ksk/.codex/skills/wsl-codex-opencode-orchestrator/SKILL.md)
