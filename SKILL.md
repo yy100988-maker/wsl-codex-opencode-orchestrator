@@ -1,6 +1,6 @@
 ---
 name: wsl-codex-opencode-orchestrator
-description: 在 Windows 上通过指定 WSL2 发行版运行 Linux OpenCode 子 agent 的多任务开发编排技能。用户只需提供需求/设计文档目录、项目产出目录和可选的关键设计文件，Codex 主控自动完成任务拆解、最小 prompt、并行调度、分段验收、状态恢复和资源清理。
+description: 在 Windows 上通过指定 WSL2 发行版运行 Linux OpenCode 子 agent 的多任务开发编排技能。当前平台主控 Agent 负责完成任务拆解、最小 prompt、并行调度、分段验收、状态恢复和资源清理。
 metadata:
   requires:
     bins: [wsl.exe, powershell]
@@ -23,7 +23,7 @@ metadata:
 
 ## 2. 固定职责
 
-### Codex 主控
+### 当前平台主控 Agent
 
 - 完整读取需求和设计文档一次。
 - 建立知识库、项目记忆、任务图和文件映射。
@@ -116,6 +116,8 @@ Supervisor 启动前必须执行 `scripts/ensure-dependencies.sh`，自动安装
 
 项目和高并发 worktree 优先使用 `/home/<user>/projects/<project>`；`/mnt/c`、`/mnt/d` 只作为兼容输入。
 
+预检默认要求项目 Git 工作区干净；如果存在未提交改动，主控必须先建立 baseline commit/patch snapshot，或在配置中显式设置 `wsl.allow_dirty_project=true`。WSL 中的 `opencode` 不能是引用 `/mnt/c`、`/mnt/d`、`powershell.exe` 或 `cmd.exe` 的 Windows 转发脚本。
+
 实际入口：
 
 ```powershell
@@ -150,6 +152,7 @@ Supervisor 默认也使用 30 秒。每轮检查 WSL 内存和 swap、Windows �
 - 任一侧达到 90%：优先 Gate、清理和释放资源。
 - 两侧低于 80%：恢复新增任务。
 - 同时满足依赖、文件不冲突、并发上限、Lease 和双层内存保护才可启动。
+- 可按任务或配置启用 `max_task_runtime_seconds` 和 `stall_timeout_seconds`；超时任务必须停止、归档、释放 Lease 并标记 `blocked`。
 
 ## 8. 进程、worktree 和 Lease 清理
 
@@ -206,7 +209,7 @@ Token与执行成本报告.md
 标准触发：
 
 ```text
-使用 $wsl-codex-opencode-orchestrator 启动项目开发。
+使用 wsl-codex-opencode-orchestrator 启动项目开发。
 
 需求/设计文档目录：D:\项目\docs
 详细设计文档：D:\项目\docs\详细设计文档.md
@@ -219,7 +222,7 @@ WSL2 发行版：Ubuntu
 继续任务：
 
 ```text
-使用 $wsl-codex-opencode-orchestrator 继续执行。
+使用 wsl-codex-opencode-orchestrator 继续执行。
 
 项目产出目标目录：D:\项目\workspace
 WSL2 发行版：Ubuntu

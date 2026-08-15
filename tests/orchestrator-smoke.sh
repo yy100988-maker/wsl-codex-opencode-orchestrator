@@ -6,7 +6,10 @@ mkdir -p "$TMP/.opencode"; printf '{"tasks":[{"id":"smoke","allowed_files":["REA
 printf '{"wsl":{"project_root":"%s"},"models":{"implementation":"x","fallback":"y","validation":"x"},"scheduler":{"max_concurrent_agents":1},"memory":{"windows_stop_admission_percent":88,"windows_critical_percent":90,"windows_reserve_mb":1,"wsl_stop_admission_percent":99}}\n' "$TMP" > "$TMP/config.json"
 "$ROOT/scripts/worktree-manager.sh" create "$TMP" smoke >/dev/null
 test -d "$TMP/.opencode/worktrees/smoke"
-printf '{"completed":true}\n' > "$TMP/.opencode/worktrees/smoke/.opencode-handoff.json"
+printf 'updated\n' >> "$TMP/.opencode/worktrees/smoke/README.md"
+git -C "$TMP/.opencode/worktrees/smoke" add README.md
+git -C "$TMP/.opencode/worktrees/smoke" commit -qm "task change"
+printf '{"task_id":"smoke","status":"completed","changed_files":["README.md"],"validation_commands":["test -f README.md"],"validation_result":"passed","known_blockers":[]}\n' > "$TMP/.opencode/worktrees/smoke/.opencode-handoff.json"
 "$ROOT/scripts/gate-runner.sh" "$TMP" smoke "$TMP/.opencode/worktrees/smoke" >/dev/null
 jq -e '.passed == true' "$TMP/.opencode/gates/smoke/result.json" >/dev/null
 "$ROOT/scripts/worktree-manager.sh" remove "$TMP" smoke

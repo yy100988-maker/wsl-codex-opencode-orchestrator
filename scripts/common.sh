@@ -28,7 +28,7 @@ wsl_ensure_state_dirs() {
   local state="$1"
   local root
   root="$(dirname "$state")"
-  mkdir -p "$root/events" "$root/gates" "$root/logs" "$root/reports" "$root/archives" "$root/worktrees" "$root/controller-memory"
+  mkdir -p "$root/events" "$root/gates" "$root/logs" "$root/reports" "$root/archives" "$root/worktrees" "$root/controller-memory" "$root/processes" "$root/metrics"
   if [[ ! -f "$state" ]]; then
     printf '{"schema_version":1,"active":[],"history":[],"events":[],"memory":null}\n' > "$state"
   fi
@@ -61,6 +61,45 @@ wsl_append_event() {
   } 9>"$event_file.lock"
 }
 
+wsl_lock_file() {
+  local path="$1"
+  exec 8>"$path.lock"
+  flock -n 8
+}
+
+wsl_update_task_status() {
+  local tasks="$1"
+  local task_id="$2"
+  local status="$3"
+  local reason="${4:-}"
+  local tmp="$tasks.tmp.$$"
+  jq --arg id "$task_id" --arg status "$status" --arg reason "$reason" \
+    '(.tasks[] | select(.id == $id) | .status) = $status |
+     (.tasks[] | select(.id == $id) | .status_reason) = (if $reason == "" then .status_reason else $reason end)' \
+    "$tasks" > "$tmp"
+  mv "$tmp" "$tasks"
+}
+
+wsl_remove_active_task() {
+  local state="$1"
+  local task_id="$2"
+  local tmp="$state.tmp.$$"
+  jq --arg id "$task_id" '.active = ([.active[] | select(.task_id != $id)])' "$state" > "$tmp"
+  mv "$tmp" "$state"
+}
+
+wsl_reconcile_task_manifest() {
+  local tasks="$1"
+  local state="$2"
+  local tmp="$tasks.tmp.$$"
+  jq --argjson history "$(jq -c '.history // []' "$state")" '
+    reduce $history[] as $entry (.;
+      (.tasks[] | select(.id == $entry.task_id) | .status) = $entry.status |
+      (.tasks[] | select(.id == $entry.task_id) | .status_reason) = ($entry.reason // .status_reason)
+    )' "$tasks" > "$tmp"
+  mv "$tmp" "$tasks"
+}
+
 wsl_latest_status() {
   local state="$1"
   local task_id="$2"
@@ -88,4 +127,3 @@ wsl_is_within() {
   local root="$2"
   [[ "$path" == "$root" || "$path" == "$root/"* ]]
 }
-

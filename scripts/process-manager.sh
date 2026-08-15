@@ -3,7 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-usage() { printf 'usage: %s start|stop|status <state> <task-id> [command...\n' "$0" >&2; exit 2; }
+usage() { printf 'usage: %s start <state> <task-id> <cwd> <command...> | stop|status <state> <task-id>\n' "$0" >&2; exit 2; }
 
 state_file="$2"
 task_id="$3"
@@ -13,17 +13,20 @@ mkdir -p "$state_dir/processes" "$state_dir/logs"
 
 case "${1:-}" in
   start)
-    shift 3
+    cwd="${4:-}"
+    shift 4
+    [[ -d "$cwd" ]] || wsl_die "working directory not found: $cwd"
     [[ $# -gt 0 ]] || usage
     log="$state_dir/logs/$task_id.log"
-    setsid bash -lc 'exec "$@"' bash "$@" >>"$log" 2>&1 &
+    setsid bash -lc 'cd "$1" && shift && exec "$@"' bash "$cwd" "$@" >>"$log" 2>&1 &
     pid=$!
-    sleep 0.2
+    sleep 0.5
+    kill -0 "$pid" 2>/dev/null || { printf 'process exited during startup; see %s\n' "$log" >&2; exit 4; }
     pgid="$(ps -o pgid= -p "$pid" | tr -d ' ' || true)"
     [[ -n "$pgid" ]] || pgid="$pid"
     start_ticks="$(ps -o lstart= -p "$pid" | sed 's/^ *//' || true)"
-    jq -cn --arg task_id "$task_id" --argjson pid "$pid" --arg pgid "$pgid" --arg start "$start_ticks" --arg log "$log" \
-      '{task_id:$task_id,pid:$pid,pgid:$pgid,start_time:$start,log:$log,status:"running",started_at:(now|todateiso8601)}' > "$pid_file"
+    jq -cn --arg task_id "$task_id" --argjson pid "$pid" --arg pgid "$pgid" --arg start "$start_ticks" --arg cwd "$cwd" --arg log "$log" \
+      '{task_id:$task_id,pid:$pid,pgid:$pgid,start_time:$start,cwd:$cwd,log:$log,status:"running",started_at:(now|todateiso8601)}' > "$pid_file"
     printf '%s\n' "$pid"
     ;;
   stop)
