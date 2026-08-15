@@ -77,6 +77,8 @@ metadata:
 .opencode/leases.json
 ```
 
+如果状态快照损坏，必须停止 Supervisor 后使用 `scripts/state-rebuild.sh` 从事件 JSONL 重建，不得手工猜测任务状态。
+
 ## 4. 任务拆分契约
 
 主控必须以代码文件不并行占用作为最小并行粒度：
@@ -152,7 +154,7 @@ Supervisor 默认也使用 30 秒。每轮检查 WSL 内存和 swap、Windows �
 - 任一侧达到 90%：优先 Gate、清理和释放资源。
 - 两侧低于 80%：恢复新增任务。
 - 同时满足依赖、文件不冲突、并发上限、Lease 和双层内存保护才可启动。
-- 可按任务或配置启用 `max_task_runtime_seconds` 和 `stall_timeout_seconds`；超时任务必须停止、归档、释放 Lease 并标记 `blocked`。
+- Supervisor 默认启用 `max_task_runtime_seconds=7200` 和 `stall_timeout_seconds=600`；超时任务必须停止、归档、释放 Lease 并标记 `blocked`。只有明确配置为更长时间才可放宽，不能用 `0` 关闭无人值守批次的超时保护。
 
 ## 8. 进程、worktree 和 Lease 清理
 

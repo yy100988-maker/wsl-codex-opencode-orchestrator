@@ -22,6 +22,9 @@ if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
   dirty="$(git -C "$root" status --porcelain)"
   [[ -z "$dirty" || "$(jq -r '.wsl.allow_dirty_project // false' "$config")" == true ]] || add_error dirty-project-requires-baseline
 fi
+if [[ -f "$root/.opencode/tasks.json" ]] && ! "$SCRIPT_DIR/task-preflight.sh" "$root" >/dev/null; then
+  add_error task-command-preflight-failed
+fi
 if command -v opencode >/dev/null 2>&1 && [[ "${opencode_path:-}" != /mnt/c/* && "${opencode_path:-}" != /mnt/d/* ]]; then
   available="$(opencode models 2>/dev/null | tr -d '\r' | sed 's/[[:space:]]*$//' || true)"
   while IFS= read -r model; do

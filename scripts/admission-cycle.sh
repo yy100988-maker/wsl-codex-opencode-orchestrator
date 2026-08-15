@@ -17,6 +17,8 @@ stop="$(jq -r '.memory.windows_stop_admission_percent // 88' "$config")"; critic
 host_script_win="$(wslpath -w "$SCRIPT_DIR/host-memory-guard.ps1")"
 host_output="$(powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$host_script_win" -StopAdmissionPercent "$stop" -CriticalPercent "$critical" -ReserveMB "$reserve" 2>&1 | tr -d '\r')" || { wsl_append_event "$state" admission-error _ "$(jq -cn --arg output "$host_output" '{reason:"host-memory-command-failed",output:$output}')"; exit 1; }
 host_json="$(printf '%s\n' "$host_output" | sed -n '/{.*}/p' | tail -n 1)"; jq -e . >/dev/null <<<"$host_json" || { wsl_append_event "$state" admission-error _ "$(jq -cn --arg output "$host_output" '{reason:"host-memory-invalid-json",output:$output}')"; exit 1; }
+host_epoch="$(date -d "$(jq -r '.measured_at' <<<"$host_json")" +%s 2>/dev/null || echo 0)"; wsl_epoch="$(date +%s)"; skew=$((wsl_epoch-host_epoch)); (( skew < 0 )) && skew=$((-skew))
+(( skew <= 300 )) || { wsl_append_event "$state" admission-error _ "$(jq -cn --argjson skew "$skew" '{reason:"clock-skew-too-large",seconds:$skew}')"; exit 1; }
 if [[ "$(jq -r '.admission_allowed' <<<"$host_json")" != true ]]; then wsl_append_event "$state" admission-paused _ "$host_json"; exit 0; fi
 
 used="$(free | awk '/Mem:/ {printf "%.0f", (($2-$7)/$2)*100}')"; wsl_stop="$(jq -r '.memory.wsl_stop_admission_percent // 88' "$config")"; wsl_critical="$(jq -r '.memory.wsl_critical_percent // 90' "$config")"

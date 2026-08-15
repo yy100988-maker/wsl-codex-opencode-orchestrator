@@ -12,7 +12,7 @@ while :; do
     exit 1
   fi
   exec 8>"$state.lock"; flock -x 8
-  max_runtime="$(jq -r '.scheduler.max_task_runtime_seconds // 0' "$config")"; stall_timeout="$(jq -r '.scheduler.stall_timeout_seconds // 0' "$config")"; now_epoch="$(date +%s)"
+  max_runtime="$(jq -r '.scheduler.max_task_runtime_seconds // 7200' "$config")"; stall_timeout="$(jq -r '.scheduler.stall_timeout_seconds // 600' "$config")"; now_epoch="$(date +%s)"
   for record in "$root"/.opencode/processes/*.json; do
     [[ -f "$record" ]] || continue
     [[ "$(jq -r '.status // "running"' "$record")" == "running" ]] || continue
