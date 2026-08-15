@@ -29,6 +29,7 @@ metadata:
 ## 设计与实施入口
 
 - [项目说明 README](README.md)
+- [完整使用说明](使用说明.md)
 - [快速开始](docs/快速开始.md)
 - [配置参考](docs/配置参考.md)
 - [任务协议](docs/任务协议.md)
