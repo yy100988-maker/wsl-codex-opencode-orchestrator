@@ -1,6 +1,6 @@
 ---
 name: wsl-codex-opencode-orchestrator
-description: 在 Windows 上通过指定 WSL2 发行版运行 OpenCode 子 agent 的多任务开发编排技能。适用于用户提供需求或设计文档目录及项目产出目录，希望由 Codex 负责规划、监督和验收，而由 WSL 内 OpenCode 按文件边界并行实现、分段测试并清理进程与 worktree 的场景。
+description: 在 Windows 上通过指定 WSL2 发行版运行 Linux OpenCode 子 agent 的多任务开发编排技能。用户只需提供需求/设计文档目录、项目产出目录和可选的关键设计文件，Codex 主控自动完成任务拆解、最小 prompt、并行调度、分段验收、状态恢复和资源清理。
 metadata:
   requires:
     bins: [wsl.exe, powershell]
@@ -8,64 +8,232 @@ metadata:
 
 # WSL Codex OpenCode Orchestrator
 
-本技能已实现 WSL Bash 调度运行时。它保持现有 Windows 版技能不变，使用同一个指定 WSL2 发行版承载多个独立 OpenCode 进程组。
+本文件是本技能的完整运行契约。用户提示词只需要触发技能并提供路径；主控 agent 必须自动加载本文件和相关设计文档，不要求用户重复粘贴完整流程。
 
-## 固定分工
+## 1. 触发输入
 
-1. Codex 主控负责需求读取、任务图、最小 prompt、调度、监督、Gate 验收、合并和资源回收。
-2. WSL 内的 OpenCode 只负责一个子任务的代码实现，不参与任务编排或跨任务协调。
-3. 测试 agent 只执行验收，配置为只读，不修改业务代码。
-4. 任务运行于同一个指定 WSL2 发行版的多个独立 Linux 进程组，而不是为每个 agent 创建独立 WSL 实例。
+用户通常只需提供：
 
-## 使用前检查
+1. 需求/设计文档目录。
+2. 项目产出目标目录。
+3. WSL2 发行版名称，默认建议 `Ubuntu`。
+4. 可选的关键详细设计文档、接口文档和测试文档文件名。
 
-1. Windows 侧必须存在 `wsl.exe` 和 PowerShell。
-2. WSL2 发行版名称必须显式配置，例如 `Ubuntu`，不能依赖默认发行版。
-3. Supervisor 启动时会先自动检查并尝试安装 `git`、`jq`、`util-linux`、`procps` 等 Ubuntu 系统依赖；如果当前用户没有免密 sudo 权限，会输出安装失败原因并阻止任务启动。
-4. WSL 内必须存在 Linux 版 `opencode`，且已完成 `opencode auth`。预检不会自动覆盖 OpenCode、模型配置或认证凭据。
-5. 项目代码和 worktree 优先放在 WSL Linux 文件系统，例如 `/home/<user>/projects`；`/mnt/c`、`/mnt/d` 仅用于兼容输入。
-6. Windows 主机与 WSL 两侧内存准入均通过后才能启动新 agent。
+如果用户没有指定关键文件，主控必须扫描设计文档目录，识别 PRD、详细设计、API、数据库、测试和部署文档。
 
-## 设计与实施入口
+## 2. 固定职责
 
-- [项目说明 README](README.md)
-- [完整使用说明](使用说明.md)
-- [快速开始](docs/快速开始.md)
-- [配置参考](docs/配置参考.md)
-- [任务协议](docs/任务协议.md)
-- [运行机制](docs/运行机制.md)
-- [故障排查](docs/故障排查.md)
-- [WSL版详细设计文档](C:/Users/y2ksk/.codex/skills/wsl-codex-opencode-orchestrator/详细设计文档.md)
-- [[详细设计文档]]
-- [技能说明](C:/Users/y2ksk/.codex/skills/wsl-codex-opencode-orchestrator/SKILL.md)
-- [[SKILL]]
+### Codex 主控
 
-## 运行入口
+- 完整读取需求和设计文档一次。
+- 建立知识库、项目记忆、任务图和文件映射。
+- 拆分任务、生成 `tasks.json` 和每个任务的最小 prompt。
+- 调度和监督 WSL Supervisor/OpenCode。
+- 执行 Gate 验收、合并任务分支、清理资源和生成报告。
 
-在 WSL 内准备 `.opencode/wsl-config.json` 和 `.opencode/tasks.json` 后，从 Windows 侧启动：
+### WSL Supervisor
+
+- 运行预检、依赖 Bootstrap、内存准入、Lease、任务启动、状态恢复和回收。
+- 不修改业务代码，不重新规划任务。
+
+### OpenCode 实现 agent
+
+- 只实现一个任务。
+- 只修改 `allowed_files`/`claimed_files` 范围内的文件。
+- 完成任务级测试、handoff 和任务分支提交。
+- 不拆任务、不协调其他 agent、不合并代码。
+
+### 测试 agent/Gate
+
+- 只读执行 Scope、Handoff、Static、Unit、Contract、Integration 和 Security 验收。
+- 不修改业务代码、不提交业务分支。
+- `handoff.completed` 不等于最终完成，必须以 Gate 结果为准。
+
+## 3. 文档加载和 Token 策略
+
+主控必须按以下顺序工作：
+
+1. 读取用户明确指定的详细设计文件。
+2. 扫描并读取需求、API、数据库、测试和部署相关文件。
+3. 扫描项目结构、Git、包管理器、构建入口和测试入口。
+4. 生成项目级摘要和契约锁。
+5. 按任务模块生成 `design_slice`，只把对应章节和必要契约传给子 agent。
+
+禁止：
+
+- 每个子 agent 重新读取完整设计文档。
+- 将完整项目历史复制到任务 prompt。
+- 让子 agent 自行探索全仓库后再决定范围。
+- 在重试时重复发送完整 prompt。
+
+状态和记忆必须落盘到：
+
+```text
+.opencode/knowledge-base/
+.opencode/controller-memory/
+.opencode/tasks.json
+.opencode/orchestrator-state.json
+.opencode/task-graph.jsonl
+.opencode/leases.json
+```
+
+## 4. 任务拆分契约
+
+主控必须以代码文件不并行占用作为最小并行粒度：
+
+1. 同时活跃任务的 `allowed_files`/`claimed_files` 不得重叠。
+2. 共享类型、Schema、配置、数据库迁移和入口注册优先串行。
+3. 独立模块、service、controller、页面和测试尽量细拆。
+4. 任务总数可以达到 100+，但实际并发不超过 100。
+5. 任务必须记录 `depends_on`、`source_files`、`source_sections`、`design_slice`、`knowledge_refs`、`acceptance`、`estimated_mb`、`prompt_file` 和 `worktree`。
+6. 共享契约必须由主控锁定，不能让多个 agent 各自猜测。
+
+最小任务结构：
+
+```json
+{
+  "id": "A1-auth-contract",
+  "depends_on": [],
+  "allowed_files": ["src/auth/**"],
+  "claimed_files": ["src/auth/types.ts"],
+  "source_files": ["docs/详细设计文档.md"],
+  "source_sections": ["认证模块"],
+  "design_slice": "仅认证模块设计需求",
+  "prompt_file": ".opencode/prompts/A1-auth-contract.md",
+  "worktree": ".opencode/worktrees/A1-auth-contract",
+  "estimated_mb": 1024,
+  "acceptance": ["认证测试通过"],
+  "status": "pending",
+  "attempt": 0
+}
+```
+
+## 5. WSL 环境和启动
+
+所有 OpenCode 子 agent 必须运行在同一个指定 WSL2 发行版内，不为每个 agent 创建独立 WSL 实例，不混用 Windows 原生 `opencode.exe`。
+
+Supervisor 启动前必须执行 `scripts/ensure-dependencies.sh`，自动安装固定白名单中的 `git`、`jq`、`util-linux`、`procps` 等系统包。安装失败必须阻止任务启动。不得自动修改 OpenCode auth、API key、cookie 或模型配置。
+
+项目和高并发 worktree 优先使用 `/home/<user>/projects/<project>`；`/mnt/c`、`/mnt/d` 只作为兼容输入。
+
+实际入口：
 
 ```powershell
-wsl.exe -d Ubuntu -- bash -lc 'cd /home/<user>/projects/<project> && bash /path/to/wsl-codex-opencode-orchestrator/scripts/supervisor-loop.sh .opencode/wsl-config.json'
+wsl.exe -d <DistroName> -- bash -lc 'cd /home/<user>/projects/<project> && bash /path/to/wsl-codex-opencode-orchestrator/scripts/supervisor-loop.sh .opencode/wsl-config.json'
 ```
 
-Supervisor 会先执行预检，再按依赖、文件租约、WSL 内存和 Windows 主机内存准入任务；每个任务使用独立 worktree 和进程组。任务结束后运行 Gate，只有通过才合并任务分支，否则归档 worktree 并释放租约。
+## 6. 模型回退
 
-单独检查环境：
+- 主模型：`opencode-go/deepseek-v4-flash`。
+- 备用模型：`opencode-go/gpt-5.6-luna`。
+- 主模型发生模型不存在、provider 不可用或启动即失败时，只回退一次。
+- 备用模型失败后进入有限重试或 `blocked`，禁止无限创建进程。
+- 回退事件必须写入 `task-graph.jsonl`。
+
+## 7. 30 秒资源监控
+
+主控生成或修正 `.opencode/wsl-config.json` 时，必须设置：
+
+```json
+{
+  "scheduler": {
+    "monitor_interval_seconds": 30
+  }
+}
+```
+
+Supervisor 默认也使用 30 秒。每轮检查 WSL 内存和 swap、Windows 主机内存、active/退出/失联 agent、文件 Lease、依赖状态、PID/PGID、Gate、handoff、日志和重试次数。
+
+准入规则：
+
+- WSL 或 Windows 任一侧达到 88%：停止新增任务。
+- 任一侧达到 90%：优先 Gate、清理和释放资源。
+- 两侧低于 80%：恢复新增任务。
+- 同时满足依赖、文件不冲突、并发上限、Lease 和双层内存保护才可启动。
+
+## 8. 进程、worktree 和 Lease 清理
+
+每个任务必须拥有独立的进程组、worktree、Lease、日志和状态记录。任务完成、失败、超时、取消或失联时：
+
+1. 校验任务 PID、PGID、启动时间和 worktree 路径。
+2. 只向当前任务进程组发送 SIGTERM。
+3. 等待宽限期后仍存活才发送 SIGKILL。
+4. Gate 通过后删除受控 worktree；失败任务归档。
+5. 释放 Lease，更新历史和事件。
+6. 生成或刷新资源清理报告。
+
+禁止使用：
 
 ```bash
-bash scripts/preflight.sh /path/to/project/.opencode/wsl-config.json
+pkill node
+pkill bun
+pkill esbuild
 ```
 
-生成资源清理报告：
+## 9. Handoff 和 Gate
 
-```bash
-bash scripts/report-builder.sh /path/to/project
+实现 agent 必须在 worktree 根目录写入 `.opencode-handoff.json`，至少包含：
+
+```json
+{
+  "task_id": "A1-auth-contract",
+  "status": "completed",
+  "changed_files": [],
+  "validation_commands": [],
+  "validation_result": "passed",
+  "known_blockers": []
+}
 ```
 
-实现 agent 使用 `opencode-go/deepseek-v4-flash`，启动失败时只回退一次到 `opencode-go/gpt-5.6-luna`。测试 Gate 读取 `.opencode-handoff.json` 和任务测试命令，不允许测试 agent 修改业务文件。
+Gate 必须验证 changed files 是否越过允许范围、handoff 是否有效、任务测试和静态检查是否通过、是否存在契约/安全违规，以及任务进程、Lease 和 worktree 是否满足回收条件。只有 Gate 通过后主控才可合并任务分支。
 
-## 启动原则
+## 10. 恢复和完成条件
 
-使用 Windows 侧的 `wsl.exe -d <DistroName> -- bash -lc ...` 启动 WSL Supervisor。Supervisor 在 WSL 内启动多个 `opencode run` 进程组，并将任务状态写入项目的 `.opencode/` 目录。
+Supervisor 重启时，主控必须读取状态快照、事件、Lease、Gate、handoff 和项目记忆，不重复启动已完成任务，不重复传递完整设计文档。
 
-首次运行建议先执行 `preflight.sh` 和 smoke 测试。预检会自动补齐可安全安装的系统依赖；预检失败时禁止启动无人值守开发。
+批次完成必须生成：
+
+```text
+开发完成报告.md
+测试验收报告.md
+阻塞项报告.md
+资源清理报告.md
+Token与执行成本报告.md
+```
+
+## 11. 用户短提示词
+
+标准触发：
+
+```text
+使用 $wsl-codex-opencode-orchestrator 启动项目开发。
+
+需求/设计文档目录：D:\项目\docs
+详细设计文档：D:\项目\docs\详细设计文档.md
+项目产出目标目录：D:\项目\workspace
+WSL2 发行版：Ubuntu
+
+请加载本技能的完整执行规则，自动生成任务图、tasks.json、知识库和子任务 prompt；按文件边界并行调用 WSL 内 OpenCode，每 30 秒监控资源，执行 Gate 验收，并在完成后清理进程、worktree 和 Lease。
+```
+
+继续任务：
+
+```text
+使用 $wsl-codex-opencode-orchestrator 继续执行。
+
+项目产出目标目录：D:\项目\workspace
+WSL2 发行版：Ubuntu
+
+请读取 .opencode/ 中的任务、状态、Lease、Gate、handoff 和项目记忆，恢复未完成任务；不要重复已完成任务，按本技能规则每 30 秒监控、验收和清理。
+```
+
+## 12. 文档入口
+
+- [README](README.md) / `[[README.md]]`
+- [使用说明](使用说明.md) / `[[使用说明.md]]`
+- [快速开始](docs/快速开始.md) / `[[快速开始.md]]`
+- [配置参考](docs/配置参考.md) / `[[配置参考.md]]`
+- [任务协议](docs/任务协议.md) / `[[任务协议.md]]`
+- [运行机制](docs/运行机制.md) / `[[运行机制.md]]`
+- [故障排查](docs/故障排查.md) / `[[故障排查.md]]`
+- [详细设计文档](详细设计文档.md) / `[[详细设计文档.md]]`
