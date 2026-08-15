@@ -8,7 +8,7 @@ metadata:
 
 # WSL Codex OpenCode Orchestrator
 
-当前阶段只完成 WSL 版架构与详细设计确认，尚未实现 Bash 调度脚本。实施时保持现有 Windows 版技能不变。
+本技能已实现 WSL Bash 调度运行时。它保持现有 Windows 版技能不变，使用同一个指定 WSL2 发行版承载多个独立 OpenCode 进程组。
 
 ## 固定分工
 
@@ -21,7 +21,7 @@ metadata:
 
 1. Windows 侧必须存在 `wsl.exe` 和 PowerShell。
 2. WSL2 发行版名称必须显式配置，例如 `Ubuntu`，不能依赖默认发行版。
-3. WSL 内必须具备 `bash`、`git`、`jq`、`setsid`、`ps`、`pgrep` 和 `opencode`。
+3. WSL 内必须具备 `bash`、`git`、`jq`、`setsid`、`ps`、`pgrep`、`flock` 和 `opencode`。缺少 `jq` 时请先在 Ubuntu 内执行 `sudo apt-get update && sudo apt-get install -y jq`。
 4. 项目代码和 worktree 优先放在 WSL Linux 文件系统，例如 `/home/<user>/projects`；`/mnt/c`、`/mnt/d` 仅用于兼容输入。
 5. Windows 主机与 WSL 两侧内存准入均通过后才能启动新 agent。
 
@@ -32,8 +32,32 @@ metadata:
 - [技能说明](C:/Users/y2ksk/.codex/skills/wsl-codex-opencode-orchestrator/SKILL.md)
 - [[SKILL]]
 
+## 运行入口
+
+在 WSL 内准备 `.opencode/wsl-config.json` 和 `.opencode/tasks.json` 后，从 Windows 侧启动：
+
+```powershell
+wsl.exe -d Ubuntu -- bash -lc 'cd /home/<user>/projects/<project> && bash /path/to/wsl-codex-opencode-orchestrator/scripts/supervisor-loop.sh .opencode/wsl-config.json'
+```
+
+Supervisor 会先执行预检，再按依赖、文件租约、WSL 内存和 Windows 主机内存准入任务；每个任务使用独立 worktree 和进程组。任务结束后运行 Gate，只有通过才合并任务分支，否则归档 worktree 并释放租约。
+
+单独检查环境：
+
+```bash
+bash scripts/preflight.sh /path/to/project/.opencode/wsl-config.json
+```
+
+生成资源清理报告：
+
+```bash
+bash scripts/report-builder.sh /path/to/project
+```
+
+实现 agent 使用 `opencode-go/deepseek-v4-flash`，启动失败时只回退一次到 `opencode-go/gpt-5.6-luna`。测试 Gate 读取 `.opencode-handoff.json` 和任务测试命令，不允许测试 agent 修改业务文件。
+
 ## 启动原则
 
 使用 Windows 侧的 `wsl.exe -d <DistroName> -- bash -lc ...` 启动 WSL Supervisor。Supervisor 在 WSL 内启动多个 `opencode run` 进程组，并将任务状态写入项目的 `.opencode/` 目录。
 
-在实现完成前，不要将本技能用于无人值守项目开发。
+首次运行建议先执行 `preflight.sh` 和 smoke 测试；预检失败时禁止启动无人值守开发。
