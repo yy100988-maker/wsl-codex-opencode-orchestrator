@@ -56,7 +56,7 @@ flowchart LR
 
 - Windows 10/11，启用 WSL2。
 - 一个明确指定的 WSL2 发行版，例如 `Ubuntu`。
-- WSL 内已安装并完成认证的 Linux 版 `opencode`。
+- WSL 内可联网安装 Linux 版 `opencode`；Supervisor 会自动安装到 `~/.opencode/bin` 并写入 `~/.profile`。首次使用后仍需在 WSL 内执行 `opencode auth`。
 - 项目优先放置在 WSL Linux 文件系统，例如 `/home/<user>/projects/<project>`。
 - OpenCode 模型可用：主模型 `opencode-go/deepseek-v4-flash`，备用模型 `opencode-go/gpt-5.6-luna`。
 
@@ -87,6 +87,7 @@ Supervisor 会先自动检查依赖，再执行配置、Git、OpenCode、模型�
 
 ```bash
 bash scripts/ensure-dependencies.sh
+bash scripts/ensure-opencode.sh /home/<user>/projects/<project>/.opencode/wsl-config.json
 bash scripts/preflight.sh /home/<user>/projects/<project>/.opencode/wsl-config.json
 ```
 

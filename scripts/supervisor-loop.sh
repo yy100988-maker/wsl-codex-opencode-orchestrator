@@ -5,6 +5,7 @@ config="${1:?config}"; root="$(jq -r '.wsl.project_root' "$config")"; state="$ro
 mkdir -p "$root/.opencode"; exec 9>"$root/.opencode/supervisor.lock"; flock -n 9 || wsl_die "supervisor already running"
 trap 'exit 0' INT TERM
 "$SCRIPT_DIR/ensure-dependencies.sh"
+"$SCRIPT_DIR/ensure-opencode.sh" "$config"
 "$SCRIPT_DIR/preflight.sh" "$config"
 while :; do
   if ! "$SCRIPT_DIR/admission-cycle.sh" "$config"; then

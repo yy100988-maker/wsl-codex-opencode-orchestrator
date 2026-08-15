@@ -2,6 +2,7 @@
 set -euo pipefail
 
 missing=()
+command -v curl >/dev/null 2>&1 || missing+=(curl)
 command -v git >/dev/null 2>&1 || missing+=(git)
 command -v jq >/dev/null 2>&1 || missing+=(jq)
 command -v setsid >/dev/null 2>&1 || missing+=(util-linux)
@@ -35,7 +36,7 @@ else
   exit 3
 fi
 
-for command_name in git jq setsid ps pgrep flock; do
+for command_name in curl git jq setsid ps pgrep flock; do
   command -v "$command_name" >/dev/null 2>&1 || { printf '{"ok":false,"error":"install-incomplete","missing":"%s"}\n' "$command_name" >&2; exit 4; }
 done
 printf '{"ok":true,"installed":"%s","message":"dependencies-installed"}\n' "${missing[*]}"

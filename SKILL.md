@@ -114,7 +114,7 @@ metadata:
 
 所有 OpenCode 子 agent 必须运行在同一个指定 WSL2 发行版内，不为每个 agent 创建独立 WSL 实例，不混用 Windows 原生 `opencode.exe`。
 
-Supervisor 启动前必须执行 `scripts/ensure-dependencies.sh`，自动安装固定白名单中的 `git`、`jq`、`util-linux`、`procps` 等系统包。安装失败必须阻止任务启动。不得自动修改 OpenCode auth、API key、cookie 或模型配置。
+Supervisor 启动前必须执行 `scripts/ensure-dependencies.sh` 和 `scripts/ensure-opencode.sh`。前者自动安装固定白名单中的 `curl`、`git`、`jq`、`util-linux`、`procps` 等系统包；后者检测并自动安装 WSL Linux 版 OpenCode 到 `~/.opencode/bin`，删除当前用户目录下已确认是 Windows wrapper 的 `~/bin/opencode`，并把 `~/.opencode/bin` 幂等写入 `~/.profile`。安装失败、路径不正确或 `opencode --version` 无法验证必须阻止任务启动。不得自动修改 OpenCode auth、API key、cookie 或模型配置。
 
 项目和高并发 worktree 优先使用 `/home/<user>/projects/<project>`；`/mnt/c`、`/mnt/d` 只作为兼容输入。
 
