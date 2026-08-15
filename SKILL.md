@@ -21,9 +21,10 @@ metadata:
 
 1. Windows 侧必须存在 `wsl.exe` 和 PowerShell。
 2. WSL2 发行版名称必须显式配置，例如 `Ubuntu`，不能依赖默认发行版。
-3. WSL 内必须具备 `bash`、`git`、`jq`、`setsid`、`ps`、`pgrep`、`flock` 和 `opencode`。缺少 `jq` 时请先在 Ubuntu 内执行 `sudo apt-get update && sudo apt-get install -y jq`。
-4. 项目代码和 worktree 优先放在 WSL Linux 文件系统，例如 `/home/<user>/projects`；`/mnt/c`、`/mnt/d` 仅用于兼容输入。
-5. Windows 主机与 WSL 两侧内存准入均通过后才能启动新 agent。
+3. Supervisor 启动时会先自动检查并尝试安装 `git`、`jq`、`util-linux`、`procps` 等 Ubuntu 系统依赖；如果当前用户没有免密 sudo 权限，会输出安装失败原因并阻止任务启动。
+4. WSL 内必须存在 Linux 版 `opencode`，且已完成 `opencode auth`。预检不会自动覆盖 OpenCode、模型配置或认证凭据。
+5. 项目代码和 worktree 优先放在 WSL Linux 文件系统，例如 `/home/<user>/projects`；`/mnt/c`、`/mnt/d` 仅用于兼容输入。
+6. Windows 主机与 WSL 两侧内存准入均通过后才能启动新 agent。
 
 ## 设计与实施入口
 
@@ -60,4 +61,4 @@ bash scripts/report-builder.sh /path/to/project
 
 使用 Windows 侧的 `wsl.exe -d <DistroName> -- bash -lc ...` 启动 WSL Supervisor。Supervisor 在 WSL 内启动多个 `opencode run` 进程组，并将任务状态写入项目的 `.opencode/` 目录。
 
-首次运行建议先执行 `preflight.sh` 和 smoke 测试；预检失败时禁止启动无人值守开发。
+首次运行建议先执行 `preflight.sh` 和 smoke 测试。预检会自动补齐可安全安装的系统依赖；预检失败时禁止启动无人值守开发。

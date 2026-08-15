@@ -3,7 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "$SCRIPT_DIR/common.sh"
 config="${1:?config path}"; root="$(jq -r '.wsl.project_root' "$config")"; distro="$(jq -r '.wsl.distro_name' "$config")"
 errors='[]'; add_error(){ errors="$(jq --arg v "$1" '. + [$v]' <<<"$errors")"; }
-for cmd in bash git jq setsid ps pgrep; do command -v "$cmd" >/dev/null 2>&1 || add_error "missing:$cmd"; done
+for cmd in bash git jq setsid ps pgrep flock; do command -v "$cmd" >/dev/null 2>&1 || add_error "missing:$cmd"; done
 command -v opencode >/dev/null 2>&1 || add_error missing:opencode
 [[ -d "$root" ]] || add_error "missing-project-root:$root"
 git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || add_error not-git-repository
