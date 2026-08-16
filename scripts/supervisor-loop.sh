@@ -6,6 +6,7 @@ mkdir -p "$root/.opencode"; exec 9>"$root/.opencode/supervisor.lock"; flock -n 9
 trap 'exit 0' INT TERM
 "$SCRIPT_DIR/ensure-dependencies.sh"
 "$SCRIPT_DIR/ensure-opencode.sh" "$config"
+"$SCRIPT_DIR/runtime-preflight.sh" "$(jq -r '.wsl.project_root' "$config")" "$config"
 "$SCRIPT_DIR/preflight.sh" "$config"
 while :; do
   if ! "$SCRIPT_DIR/admission-cycle.sh" "$config"; then
@@ -33,13 +34,31 @@ while :; do
     if "$SCRIPT_DIR/gate-runner.sh" "$root" "$id" "$wt" >/dev/null 2>&1; then gate_passed=true; fi
     gate_file="$root/.opencode/gates/$id/result.json"
     if [[ "$gate_passed" == true ]]; then
-      if git -C "$root" merge --no-edit "codex/task-$id" >/dev/null 2>&1; then
-        if ! "$SCRIPT_DIR/process-manager.sh" stop "$state" "$id" >/dev/null || ! "$SCRIPT_DIR/worktree-manager.sh" remove "$root" "$id"; then
+      task_base="$(jq -r --arg id "$id" 'first(.tasks[] | select(.id == $id) | .base_commit) // empty' "$tasks")"
+      branch="codex/task-$id"
+      branch_commit="$(git -C "$root" rev-parse "$branch" 2>/dev/null || true)"
+      branch_changes="$(git -C "$root" diff --name-only "$task_base" "$branch_commit" 2>/dev/null || true)"
+      if [[ -z "$task_base" || -z "$branch_commit" || "$branch_commit" == "$task_base" || -z "$branch_changes" ]]; then
+        status=blocked; reason="empty-task-branch"; wsl_append_event "$state" merge-error "$id" '{"reason":"empty-task-branch"}'
+        "$SCRIPT_DIR/worktree-manager.sh" archive "$root" "$id" || true
+        "$SCRIPT_DIR/process-manager.sh" stop "$state" "$id" >/dev/null || true
+      elif git -C "$root" merge --no-edit "$branch" >/dev/null 2>&1; then
+        merged_commit="$(git -C "$root" rev-parse HEAD)"
+        expected_files="$(jq -c '.changed_files // []' "$gate_file")"
+        merged_files="$(git -C "$root" diff --name-only "$task_base" "$merged_commit" | sort -u | jq -Rsc 'split("\n") | map(select(length > 0))')"
+        if ! jq -e --argjson expected "$expected_files" --argjson actual "$merged_files" 'all($expected[]; . as $file | ($actual | index($file)) != null)' >/dev/null <<< '{}'; then
+          status=blocked; reason="merge-content-verification-failed"; git -C "$root" merge --abort >/dev/null 2>&1 || true
+          wsl_append_event "$state" merge-error "$id" '{"reason":"merge-content-verification-failed"}'
+          "$SCRIPT_DIR/worktree-manager.sh" archive "$root" "$id" || true
+          "$SCRIPT_DIR/process-manager.sh" stop "$state" "$id" >/dev/null || true
+        elif ! "$SCRIPT_DIR/process-manager.sh" stop "$state" "$id" >/dev/null || ! "$SCRIPT_DIR/worktree-manager.sh" remove "$root" "$id"; then
           wsl_append_event "$state" cleanup-error "$id" '{"reason":"accepted-task-cleanup-failed"}'; continue
+        else
+          status=done; reason="gate-passed"; wsl_append_event "$state" task-merged "$id" "$(jq -cn --arg commit "$merged_commit" '{merged_commit:$commit}')"
         fi
-        status=done; reason="gate-passed"
       else
         status=blocked; reason="merge-failed"; wsl_append_event "$state" merge-error "$id" '{"reason":"git-merge-failed"}'
+        git -C "$root" merge --abort >/dev/null 2>&1 || true
         "$SCRIPT_DIR/worktree-manager.sh" archive "$root" "$id" || true
         "$SCRIPT_DIR/process-manager.sh" stop "$state" "$id" >/dev/null || true
       fi

@@ -6,7 +6,23 @@ mkdir -p "$(dirname "$out")"
 
 allowed="$(jq -c --arg id "$task_id" 'first(.tasks[] | select(.id == $id) | .allowed_files) // []' "$task_json")"
 handoff_file="$wt/.opencode-handoff.json"
-handoff_ok=false; scope_ok=false; static_ok=false; tests_ok="not-configured"; changed='[]'; error=''
+handoff_ok=false; scope_ok=false; static_ok=false; tests_ok="not-configured"; changed='[]'; error=''; base_commit=''; branch_commit=''; required='["scope","handoff","static"]'
+
+task_record="$(jq -c --arg id "$task_id" 'first(.tasks[] | select(.id == $id)) // {}' "$task_json")"
+base_commit="$(jq -r '.base_commit // empty' <<<"$task_record")"
+branch_commit="$(git -C "$wt" rev-parse HEAD 2>/dev/null || true)"
+if [[ -z "$base_commit" ]]; then error="task-base-commit-missing"; fi
+if [[ -n "$base_commit" && -n "$branch_commit" ]]; then
+  git -C "$root" cat-file -e "$base_commit^{commit}" >/dev/null 2>&1 || error="task-base-commit-invalid"
+  git -C "$wt" merge-base --is-ancestor "$base_commit" "$branch_commit" >/dev/null 2>&1 || error="task-base-commit-not-ancestor"
+fi
+required="$(jq -c '(.required_gates // ["scope","handoff","static"]) + (if (.test_command // "") != "" then ["unit"] else [] end) | unique' <<<"$task_record")"
+for required_gate in contract integration security; do
+  if jq -e --arg gate "$required_gate" 'index($gate) != null' <<<"$required" >/dev/null 2>&1; then
+    configured="$(jq -r --arg gate "$required_gate" '.gate_commands[$gate] // empty' <<<"$task_record")"
+    [[ -n "$configured" ]] || error="${error:-$required_gate-gate-not-configured}"
+  fi
+done
 
 if [[ ! -f "$handoff_file" ]]; then
   error="handoff-missing"
@@ -18,14 +34,13 @@ else
   [[ "$handoff_status" == "completed" || "$handoff_status" == "passed" ]] || error="handoff-status-invalid"
   if [[ -z "$error" ]]; then handoff_ok=true; fi
 
-  base_commit="$(git -C "$root" rev-parse HEAD)"
-  branch_commit="$(git -C "$wt" rev-parse HEAD)"
   committed="$(git -C "$wt" diff --name-only "$base_commit" "$branch_commit" || true)"
   tracked="$(git -C "$wt" diff --name-only "$branch_commit" -- || true)"
   untracked="$(git -C "$wt" ls-files --others --exclude-standard || true)"
   changed="$(printf '%s\n%s\n%s\n' "$committed" "$tracked" "$untracked" | sed '/^$/d' | grep -vE '^(\.opencode-handoff\.json|\.opencode-task-prompt\.md)$' | sort -u | jq -Rsc 'split("\n") | map(select(length > 0))')"
   handoff_files_sorted="$(jq -c 'sort' <<<"$handoff_files")"
   changed_sorted="$(jq -c 'sort' <<<"$changed")"
+  [[ "$branch_commit" != "$base_commit" ]] || error="${error:-empty-task-branch}"
   if [[ "$changed_sorted" == "$handoff_files_sorted" ]]; then
     scope_ok=true
   else
@@ -48,9 +63,10 @@ fi
 
 passed=false
 if [[ "$handoff_ok" == true && "$scope_ok" == true && "$static_ok" == true && "$tests_ok" != false ]]; then passed=true; fi
-jq_unit="$tests_ok"; jq -cn --argjson scope "$scope_ok" --argjson handoff "$handoff_ok" --argjson static "$static_ok" --arg unit "$jq_unit" '{scope:$scope,handoff:$handoff,static:$static,unit:$unit,contract:"not-configured",integration:"not-configured",security:"not-configured"}' > "$out.gates"
+if jq -e 'index("unit") != null' <<<"$required" >/dev/null 2>&1 && [[ "$tests_ok" != true ]]; then passed=false; error="${error:-unit-gate-not-configured}"; fi
+jq_unit="$tests_ok"; jq -cn --argjson scope "$scope_ok" --argjson handoff "$handoff_ok" --argjson static "$static_ok" --arg unit "$jq_unit" --argjson required "$required" '{scope:$scope,handoff:$handoff,static:$static,unit:$unit,required_gates:$required,contract:(if ($required|index("contract")) then "not-configured" else "not-required" end),integration:(if ($required|index("integration")) then "not-configured" else "not-required" end),security:(if ($required|index("security")) then "not-configured" else "not-required" end)}' > "$out.gates"
 gates="$(cat "$out.gates")"; rm -f "$out.gates"
-jq -cn --arg task_id "$task_id" --argjson passed "$passed" --argjson gates "$gates" --argjson changed "$changed" --arg error "$error" \
-  '{task_id:$task_id,passed:$passed,gates:$gates,changed_files:$changed,error:(if $error == "" then null else $error end),checked_at:(now|todateiso8601)}' > "$out"
+jq -cn --arg task_id "$task_id" --arg base_commit "$base_commit" --arg branch_commit "$branch_commit" --argjson passed "$passed" --argjson gates "$gates" --argjson changed "$changed" --arg error "$error" \
+  '{task_id:$task_id,base_commit:$base_commit,branch_commit:$branch_commit,passed:$passed,gates:$gates,changed_files:$changed,error:(if $error == "" then null else $error end),checked_at:(now|todateiso8601)}' > "$out"
 cat "$out"
 [[ "$passed" == true ]]

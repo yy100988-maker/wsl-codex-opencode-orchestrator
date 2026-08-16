@@ -81,20 +81,22 @@ metadata:
 
 ## 4. 任务拆分契约
 
-主控必须以代码文件不并行占用作为最小并行粒度：
+主控必须以实际源码文件不并行占用作为最小并行粒度：
 
-1. 同时活跃任务的 `allowed_files`/`claimed_files` 不得重叠。
-2. 共享类型、Schema、配置、数据库迁移和入口注册优先串行。
-3. 独立模块、service、controller、页面和测试尽量细拆。
-4. 任务总数可以达到 100+，但实际并发不超过 100。
-5. 任务必须记录 `depends_on`、`source_files`、`source_sections`、`design_slice`、`knowledge_refs`、`acceptance`、`estimated_mb`、`prompt_file` 和 `worktree`。
-6. 共享契约必须由主控锁定，不能让多个 agent 各自猜测。
+1. 先把目录通配符展开为当前仓库实际源码文件，再为每个源码文件生成独立任务；目录通配符不能作为最终并行边界。
+2. 同时活跃任务的 `allowed_files`/`claimed_files` 不得重叠；同一源码文件不得被两个 active agent 同时占用。
+3. 共享类型、Schema、配置、数据库迁移和入口注册优先生成单文件串行任务。
+4. 如果多个原始任务命中同一源码文件，后一个文件任务自动依赖前一个文件任务。
+5. 独立模块、service、controller、页面和测试尽量细拆，任务总数可以达到 100+，但实际并发不超过 100。
+6. 任务必须记录 `base_commit`、`depends_on`、`source_files`、`source_sections`、`design_slice`、`knowledge_refs`、`acceptance`、`estimated_mb`、`prompt_file` 和 `worktree`。
+7. 共享契约必须由主控锁定，不能让多个 agent 各自猜测。
 
 最小任务结构：
 
 ```json
 {
   "id": "A1-auth-contract",
+  "base_commit": "<task-creation-commit>",
   "depends_on": [],
   "allowed_files": ["src/auth/**"],
   "claimed_files": ["src/auth/types.ts"],
@@ -112,11 +114,11 @@ metadata:
 
 ## 5. WSL 环境和启动
 
-所有 OpenCode 子 agent 必须运行在同一个指定 WSL2 发行版内，不为每个 agent 创建独立 WSL 实例，不混用 Windows 原生 `opencode.exe`。
+所有 OpenCode 子 agent 必须运行在同一个指定 WSL2 发行版内，不为每个 agent 创建独立 WSL 实例，不混用 Windows 原生 `opencode.exe`。主控生成任务后必须执行 `scripts/task-decompose.sh <project-root>`，将目录级任务展开成源码文件级任务，并重新生成每个子任务的最小 prompt。
 
-Supervisor 启动前必须执行 `scripts/ensure-dependencies.sh` 和 `scripts/ensure-opencode.sh`。前者自动安装固定白名单中的 `curl`、`git`、`jq`、`util-linux`、`procps` 等系统包；后者检测并自动安装 WSL Linux 版 OpenCode 到 `~/.opencode/bin`，删除当前用户目录下已确认是 Windows wrapper 的 `~/bin/opencode`，并把 `~/.opencode/bin` 幂等写入 `~/.profile`。安装失败、路径不正确或 `opencode --version` 无法验证必须阻止任务启动。不得自动修改 OpenCode auth、API key、cookie 或模型配置。
+Supervisor 启动前必须执行 `scripts/ensure-dependencies.sh`、`scripts/ensure-opencode.sh` 和 `scripts/runtime-preflight.sh`。前者自动安装固定白名单中的 `curl`、`git`、`jq`、`util-linux`、`procps` 等系统包；OpenCode Bootstrap 检测并自动安装 WSL Linux 版 OpenCode 到 `~/.opencode/bin`，删除当前用户目录下已确认是 Windows wrapper 的 `~/bin/opencode`，并把 `~/.opencode/bin` 幂等写入 `~/.profile`。运行时预检还必须拒绝 Windows Node/pnpm、悬空 `node_modules` 链接和损坏的 lockfile 物化依赖。安装失败、路径不正确或 `opencode --version` 无法验证必须阻止任务启动。不得自动修改 OpenCode auth、API key、cookie 或模型配置。
 
-项目和高并发 worktree 优先使用 `/home/<user>/projects/<project>`；`/mnt/c`、`/mnt/d` 只作为兼容输入。
+项目和高并发 worktree 优先使用 `/home/<user>/projects/<project>`；`/mnt/c`、`/mnt/d` 只作为兼容输入。Supervisor 还必须在 OpenCode 预检后执行 `scripts/runtime-preflight.sh`，检查 Linux 原生 Node/pnpm、lockfile 依赖树和悬空 `node_modules` 链接；必要时使用 `pnpm install --frozen-lockfile` 修复。
 
 预检默认要求项目 Git 工作区干净；如果存在未提交改动，主控必须先建立 baseline commit/patch snapshot，或在配置中显式设置 `wsl.allow_dirty_project=true`。WSL 中的 `opencode` 不能是引用 `/mnt/c`、`/mnt/d`、`powershell.exe` 或 `cmd.exe` 的 Windows 转发脚本。
 
@@ -190,9 +192,13 @@ pkill esbuild
 }
 ```
 
-Gate 必须验证 changed files 是否越过允许范围、handoff 是否有效、任务测试和静态检查是否通过、是否存在契约/安全违规，以及任务进程、Lease 和 worktree 是否满足回收条件。只有 Gate 通过后主控才可合并任务分支。
+Gate 必须基于任务创建时固定的 `base_commit` 验证 changed files 是否越过允许范围、handoff 是否有效、任务测试和静态检查是否通过、是否存在契约/安全违规，以及任务进程、Lease 和 worktree 是否满足回收条件。空分支、空合并和必需 Gate 的 `not-configured` 都必须失败；合并后还要验证 changed files 已进入目标分支，只有全部通过后主控才可标记 done。
 
 ## 10. 恢复和完成条件
+
+WSL Linux 项目目录是任务状态和代码的唯一事实来源。需要更新 Windows 交付镜像时，主控执行 `scripts/delivery-sync.sh <config>`；该命令只同步 tasks、状态、Gate、报告、归档、prompt 和项目记忆，并先备份目标 `.opencode`，不得覆盖业务代码。
+
+任务归档必须包含 `manifest.json`、`hashes.sha256`、`changes.patch` 和 untracked 文件副本；恢复时使用 `scripts/worktree-manager.sh restore`，恢复后必须重新运行 Gate。
 
 Supervisor 重启时，主控必须读取状态快照、事件、Lease、Gate、handoff 和项目记忆，不重复启动已完成任务，不重复传递完整设计文档。
 

@@ -32,6 +32,14 @@ candidates="$(jq -c --argjson done "$done_ids" --argjson active "$active_ids" '[
 while IFS= read -r task && (( slots > 0 )); do
   [[ -n "$task" ]] || continue
   id="$(jq -r '.id' <<<"$task")"; wt="$root/.opencode/worktrees/$id"; prompt="$root/.opencode/prompts/$id.md"; files="$(jq -c '.allowed_files // []' <<<"$task")"
+  base_commit="$(jq -r '.base_commit // empty' <<<"$task")"
+  if [[ -z "$base_commit" ]]; then
+    base_commit="$(git -C "$root" rev-parse HEAD)"
+    tmp_tasks="$tasks.tmp.$$"
+    jq --arg id "$id" --arg base "$base_commit" '(.tasks[] | select(.id == $id) | .base_commit) = $base' "$tasks" > "$tmp_tasks"
+    mv "$tmp_tasks" "$tasks"
+    task="$(jq -c --arg id "$id" 'first(.tasks[] | select(.id == $id))' "$tasks")"
+  fi
   mkdir -p "$root/.opencode/prompts"
   [[ -f "$prompt" ]] || jq -r '.prompt // .design_slice // "Implement this task according to the task record."' <<<"$task" > "$prompt"
   "$SCRIPT_DIR/lease-manager.sh" acquire "$state" "$id" "$files" "$(jq -r '.lease_ttl_seconds // 3600' <<<"$task")" || continue
