@@ -46,7 +46,7 @@ flowchart LR
 - **主控职责固定**：Codex 规划、监督、Gate 验收、合并和清理；OpenCode 不负责拆解任务。
 - **文件边界并行**：通过 `allowed_files` 和 Lease 防止两个实现 agent 同时修改同一文件。
 - **双层内存保护**：同时检查 WSL 内存和 Windows 主机内存，任一侧达到停止阈值就暂停新增任务。
-- **模型回退**：优先使用 `opencode-go/deepseek-v4-flash`，启动失败时只回退一次到 `opencode-go/gpt-5.6-luna`。
+- **模型回退**：优先使用 `opencode-go/mimo-v2.5`，启动失败时只回退一次到 `opencode-go/hy3`。
 - **自动依赖补齐**：启动时自动安装固定白名单中的 Ubuntu 系统包；不自动修改 OpenCode 认证和模型配置。
 - **快速资源回收**：Supervisor 默认每 30 秒检查一次已完成任务并释放进程、worktree 和 Lease。
 - **分段验收**：要求 handoff、文件范围、任务测试和 Gate 结果全部满足后才允许合并。
@@ -58,7 +58,7 @@ flowchart LR
 - 一个明确指定的 WSL2 发行版，例如 `Ubuntu`。
 - WSL 内可联网安装 Linux 版 `opencode`；Supervisor 会自动安装到 `~/.opencode/bin` 并写入 `~/.profile`。首次使用后仍需在 WSL 内执行 `opencode auth`。
 - 项目优先放置在 WSL Linux 文件系统，例如 `/home/<user>/projects/<project>`。
-- OpenCode 模型可用：主模型 `opencode-go/deepseek-v4-flash`，备用模型 `opencode-go/gpt-5.6-luna`。
+- OpenCode 模型可用：主模型 `opencode-go/mimo-v2.5`，备用模型 `opencode-go/hy3`。
 
 ## 快速开始
 

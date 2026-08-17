@@ -130,8 +130,8 @@ wsl.exe -d <DistroName> -- bash -lc 'cd /home/<user>/projects/<project> && bash 
 
 ## 6. 模型回退
 
-- 主模型：`opencode-go/deepseek-v4-flash`。
-- 备用模型：`opencode-go/gpt-5.6-luna`。
+- 主模型：`opencode-go/mimo-v2.5`。
+- 备用模型：`opencode-go/hy3`。
 - 主模型发生模型不存在、provider 不可用或启动即失败时，只回退一次。
 - 备用模型失败后进入有限重试或 `blocked`，禁止无限创建进程。
 - 回退事件必须写入 `task-graph.jsonl`。
