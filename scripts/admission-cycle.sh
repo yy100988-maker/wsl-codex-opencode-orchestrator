@@ -9,9 +9,23 @@ exec 8>"$state.lock"; flock -n 8 || exit 75
 jq -e 'type == "object" and (.active | type == "array") and (.history | type == "array")' "$state" >/dev/null || wsl_die "invalid orchestrator state schema: $state"
 jq -e 'type == "object" and (.tasks | type == "array") and all(.tasks[]; (.id | type == "string"))' "$tasks" >/dev/null || wsl_die "invalid tasks manifest schema: $tasks"
 wsl_reconcile_task_manifest "$tasks" "$state"
-max="$(jq -r '.scheduler.max_concurrent_agents // 100' "$config")"
+# Adaptive concurrency based on memory pressure
+adaptive_concurrency() {
+  local used=$1 max=$2
+  if (( used < 70 )); then echo "$max"
+  elif (( used < 80 )); then echo $(( max * 70 / 100 ))
+  elif (( used < 85 )); then echo $(( max * 40 / 100 ))
+  elif (( used < 90 )); then echo $(( max * 10 / 100 ))
+  else echo 0
+  fi
+}
+
+max="$(jq -r '.scheduler.max_concurrent_agents // 5' "$config")"
 active="$(jq '[.active[] | select(.status=="running" or .status=="admitted")] | length' "$state")"
-slots=$((max-active)); (( slots > 0 )) || exit 0
+# Get WSL memory usage for adaptive concurrency
+wsl_used=$(free | awk '/Mem:/ {printf "%.0f", (($2-$7)/$2)*100}')
+effective_max=$(adaptive_concurrency "$wsl_used" "$max")
+slots=$((effective_max-active)); (( slots > 0 )) || exit 0
 
 stop="$(jq -r '.memory.windows_stop_admission_percent // 88' "$config")"; critical="$(jq -r '.memory.windows_critical_percent // 90' "$config")"; reserve="$(jq -r '.memory.windows_reserve_mb // 4096' "$config")"
 host_script_win="$(wslpath -w "$SCRIPT_DIR/host-memory-guard.ps1")"

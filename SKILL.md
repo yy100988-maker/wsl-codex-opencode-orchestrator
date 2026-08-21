@@ -1,4 +1,4 @@
----
+﻿---
 name: wsl-codex-opencode-orchestrator
 description: 在 Windows 上通过指定 WSL2 发行版运行 Linux OpenCode 子 agent 的多任务开发编排技能。当前平台主控 Agent 负责完成任务拆解、最小 prompt、并行调度、分段验收、状态恢复和资源清理。
 metadata:
@@ -25,11 +25,13 @@ metadata:
 
 ### 当前平台主控 Agent
 
+- **只负责调度，不负责写代码。** 主控 agent 绝对不能直接读取业务源文件、不能直接创建或修改业务代码文件。代码实现必须由子 agent 完成。
 - 完整读取需求和设计文档一次。
 - 建立知识库、项目记忆、任务图和文件映射。
 - 拆分任务、生成 `tasks.json` 和每个任务的最小 prompt。
-- 调度和监督 WSL Supervisor/OpenCode。
+- 通过调度脚本（`admission-cycle.sh`）启动 WSL Supervisor/OpenCode，而不是自己执行开发任务。
 - 执行 Gate 验收、合并任务分支、清理资源和生成报告。
+- **禁止事项：** 主控 agent 禁止直接读写 `.js`、`.ts`、`.py`、`.vue` 等业务源文件。发现违规必须立即停止，改为将任务分发给子 agent。
 
 ### WSL Supervisor
 
@@ -128,10 +130,54 @@ Supervisor 启动前必须执行 `scripts/ensure-dependencies.sh`、`scripts/ens
 wsl.exe -d <DistroName> -- bash -lc 'cd /home/<user>/projects/<project> && bash /path/to/wsl-codex-opencode-orchestrator/scripts/supervisor-loop.sh .opencode/wsl-config.json'
 ```
 
-## 6. 模型回退
+## 6. Agent Provider 和模型回退
+
+WSL 版本支持两种 agent provider：OpenCode 和 xAI Grok CLI。
+
+### Provider 配置
+
+在 `.opencode/wsl-config.json` 中设置：
+
+```json
+{
+  "agent": {
+    "provider": "opencode"
+  },
+  "models": {
+    "implementation": "opencode-go/mimo-v2.5",
+    "fallback": "opencode-go/hy3"
+  }
+}
+```
+
+切换到 Grok CLI：
+
+```json
+{
+  "agent": {
+    "provider": "grok"
+  },
+  "models": {
+    "implementation": "grok-4",
+    "fallback": "grok-4"
+  }
+}
+```
+
+### OpenCode 模式
 
 - 主模型：`opencode-go/mimo-v2.5`。
 - 备用模型：`opencode-go/hy3`。
+- 命令格式：`opencode run --model <model> --format json --file <prompt>`
+
+### Grok CLI 模式
+
+- 需要在 WSL 中安装 grok wrapper：`~/bin/grok` 指向 `/mnt/d/Program Files/grok/grok.exe`。
+- 命令格式：`grok agent --cwd <worktree> --prompt-file <prompt> --model <model> --output-format streaming-json --no-subagents --permission-mode auto --max-turns 30`
+- Grok CLI 使用自身模型和配置，不套用 OpenCode 的模型回退规则。
+
+### 回退规则
+
 - 主模型发生模型不存在、provider 不可用或启动即失败时，只回退一次。
 - 备用模型失败后进入有限重试或 `blocked`，禁止无限创建进程。
 - 回退事件必须写入 `task-graph.jsonl`。
@@ -214,7 +260,7 @@ Token与执行成本报告.md
 
 ## 11. 用户短提示词
 
-标准触发：
+### 方式一：设计文档目录 + 产出目录
 
 ```text
 使用 wsl-codex-opencode-orchestrator 启动项目开发。
@@ -227,7 +273,24 @@ WSL2 发行版：Ubuntu
 请加载本技能的完整执行规则，自动生成任务图、tasks.json、知识库和子任务 prompt；按文件边界并行调用 WSL 内 OpenCode，每 30 秒监控资源，执行 Gate 验收，并在完成后清理进程、worktree 和 Lease。
 ```
 
-继续任务：
+### 方式二：单文件设计文档 + 现有工作区
+
+```text
+$wsl-codex-opencode-orchestrator 你是主控agent，请根据设计文档：<设计文档绝对路径>
+产出物路径：<现有项目工作区或指定路径>
+WSL2 发行版：Ubuntu
+完成文档中所有功能开发和自动化测试。
+```
+
+### 方式三：一行完整指令
+
+```text
+$wsl-codex-opencode-orchestrator 你是主控agent，请根据设计文档：<文档路径> 产出物路径：<本工作区或指定路径>，完成文档中所有功能开发和自动化测试。
+```
+
+**重要：主控 agent 只负责调度，不直接写代码。** 所有代码实现必须通过 `admission-cycle.sh` 分发给 WSL 内的 OpenCode 子 agent 执行。
+
+### 继续任务
 
 ```text
 使用 wsl-codex-opencode-orchestrator 继续执行。

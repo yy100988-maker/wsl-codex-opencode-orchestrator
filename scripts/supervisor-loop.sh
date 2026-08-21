@@ -8,7 +8,42 @@ trap 'exit 0' INT TERM
 "$SCRIPT_DIR/ensure-opencode.sh" "$config"
 "$SCRIPT_DIR/runtime-preflight.sh" "$(jq -r '.wsl.project_root' "$config")" "$config"
 "$SCRIPT_DIR/preflight.sh" "$config"
+# Orphan process scanner
+scan_orphans() {
+  local state="$1" root="$2"
+  for record in "$root"/.opencode/processes/*.json; do
+    [[ -f "$record" ]] || continue
+    [[ "$(jq -r '.status // "running"' "$record")" == "running" ]] || continue
+    local id=$(jq -r '.task_id' "$record")
+    local pid=$(jq -r '.pid' "$record")
+    if kill -0 "$pid" 2>/dev/null; then continue; fi
+    # Root dead, find orphaned children by worktree path
+    local wt=$(jq -r '.cwd // empty' "$record")
+    if [[ -n "$wt" ]]; then
+      pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+      if [[ -n "$pgid" ]]; then
+        ps -o pid= --pgid "$pgid" 2>/dev/null | while read -r child_pid; do
+          child_pid=$(echo "$child_pid" | tr -d ' ')
+          [[ -n "$child_pid" ]] || continue
+          kill -TERM "$child_pid" 2>/dev/null || true
+          wsl_append_event "$state" orphan-killed "$id" "{"pid":$child_pid}"
+        done
+      fi
+    fi
+    "$SCRIPT_DIR/process-manager.sh" stop "$state" "$id" >/dev/null || true
+    wsl_append_event "$state" orphan-recovered "$id" '{"reason":"root-process-dead"}'
+  done
+}
+
+cycle_count=0
+orphan_scan_interval=$(jq -r '.scheduler.orphan_scan_interval // 5' "$config")
+
 while :; do
+  cycle_count=$((cycle_count + 1))
+  # Periodic orphan scan
+  if (( cycle_count % orphan_scan_interval == 0 )); then
+    scan_orphans "$state" "$root" 2>/dev/null || true
+  fi
   if ! "$SCRIPT_DIR/admission-cycle.sh" "$config"; then
     wsl_append_event "$state" supervisor-error _ '{"reason":"admission-cycle-failed"}'
     exit 1

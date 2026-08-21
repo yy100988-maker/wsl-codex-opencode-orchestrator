@@ -32,6 +32,26 @@ if command -v opencode >/dev/null 2>&1 && [[ "${opencode_path:-}" != /mnt/c/* &&
     grep -Fqx "$model" <<<"$available" || add_error "model-not-listed:$model"
   done < <(jq -r '.models | [.implementation,.fallback,.validation] | .[]' "$config")
 fi
+# Cgroup memory limit
+ensure_cgroup_limit() {
+  local cfg="$1"
+  local cgroup_enabled=$(jq -r '.memory.cgroup_enabled // false' "$cfg")
+  [[ "$cgroup_enabled" == "true" ]] || return 0
+  local limit_mb=$(jq -r '.memory.wsl_max_mb // 8192' "$cfg")
+  local limit_bytes=$((limit_mb * 1024 * 1024))
+  local cgroup_path="/sys/fs/cgroup/memory.max"
+  if [[ -f "$cgroup_path" ]]; then
+    local current_max=$(cat "$cgroup_path" 2>/dev/null || echo "max")
+    if [[ "$current_max" == "max" ]] || [[ "$current_max" -gt "$limit_bytes" ]] 2>/dev/null; then
+      echo "$limit_bytes" > "$cgroup_path" 2>/dev/null || add_error "cgroup-set-failed"
+    fi
+  else
+    add_error "cgroup-not-available"
+  fi
+}
+
+ensure_cgroup_limit "$config"
+
 ok=true; [[ "$errors" == '[]' ]] || ok=false
 jq -cn --arg distro "$distro" --arg root "$root" --argjson ok "$ok" --argjson errors "$errors" '{ok:$ok,distro:$distro,project_root:$root,errors:$errors,checked_at:(now|todateiso8601)}'
 [[ "$ok" == true ]] || exit 2
