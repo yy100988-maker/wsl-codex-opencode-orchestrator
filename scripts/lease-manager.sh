@@ -7,7 +7,7 @@ exec 9>"$leases.lock"; flock -x 9
 jq -e 'type == "array" and all(.[]; (.task_id | type == "string") and (.files | type == "array") and (.expires_at | type == "number"))' "$leases" >/dev/null || wsl_die "invalid leases schema: $leases"
 case "$action" in
  acquire)
-  jq -e --argjson files "$files" '$files | type == "array"' /dev/null >/dev/null || wsl_die "invalid lease files JSON"
+  jq -ne --argjson files "$files" '$files | type == "array"' >/dev/null || wsl_die "invalid lease files JSON"
   now="$(date +%s)"; expiry=$((now + ttl))
   if jq -e --arg task_id "$task_id" --argjson files "$files" --argjson now "$now" 'any(.[]; .expires_at > $now and (.task_id != $task_id) and any(.files[] as $a | $files[] as $b | ($a==$b or ($a|startswith($b+"/")) or ($b|startswith($a+"/")))))' "$leases" >/dev/null; then exit 3; fi
   if jq -e --arg task_id "$task_id" --argjson now "$now" 'any(.[]; .expires_at > $now and .task_id == $task_id)' "$leases" >/dev/null; then exit 0; fi

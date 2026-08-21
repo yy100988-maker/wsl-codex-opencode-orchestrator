@@ -34,9 +34,9 @@ else
   [[ "$handoff_status" == "completed" || "$handoff_status" == "passed" ]] || error="handoff-status-invalid"
   if [[ -z "$error" ]]; then handoff_ok=true; fi
 
-  committed="$(git -C "$wt" diff --name-only "$base_commit" "$branch_commit" || true)"
-  tracked="$(git -C "$wt" diff --name-only "$branch_commit" -- || true)"
-  untracked="$(git -C "$wt" ls-files --others --exclude-standard || true)"
+  committed="$(git -C "$wt" -c core.quotepath=false diff --name-only "$base_commit" "$branch_commit" || true)"
+  tracked="$(git -C "$wt" -c core.quotepath=false diff --name-only "$branch_commit" -- || true)"
+  untracked="$(git -C "$wt" -c core.quotepath=false ls-files --others --exclude-standard || true)"
   changed="$(printf '%s\n%s\n%s\n' "$committed" "$tracked" "$untracked" | sed '/^$/d' | grep -vE '^(\.opencode-handoff\.json|\.opencode-task-prompt\.md)$' | sort -u | jq -Rsc 'split("\n") | map(select(length > 0))')"
   handoff_files_sorted="$(jq -c 'sort' <<<"$handoff_files")"
   changed_sorted="$(jq -c 'sort' <<<"$changed")"

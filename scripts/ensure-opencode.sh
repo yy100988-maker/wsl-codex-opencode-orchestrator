@@ -20,6 +20,9 @@ json_result() {
 is_windows_wrapper() {
   local command_path="$1"
   [[ -n "$command_path" && -f "$command_path" ]] || return 1
+  local elf_magic
+  elf_magic="$(head -c 4 "$command_path" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+  [[ "$elf_magic" == "7f454c46" ]] && return 1
   grep -Eiq '(/mnt/[cd]/|powershell\.exe|cmd\.exe|\.exe([[:space:]]|$))' "$command_path"
 }
 

@@ -127,3 +127,78 @@ wsl_is_within() {
   local root="$2"
   [[ "$path" == "$root" || "$path" == "$root/"* ]]
 }
+
+wsl_warn() {
+  printf 'WARNING: %s\n' "$*" >&2
+}
+
+wsl_resolve_config() {
+  local config="$1"
+  jq -n --slurpfile defaults <(cat <<'DEFAULTS'
+{
+  "schema_version": 1,
+  "scheduler": {
+    "max_concurrent_agents": 15,
+    "max_new_agents_per_cycle": 5,
+    "monitor_interval_seconds": 30,
+    "orphan_scan_interval": 5,
+    "health_check_interval": 1,
+    "disk_recovery_interval": 10,
+    "event_compress_interval": 100,
+    "max_task_runtime_seconds": 3600,
+    "stall_timeout_seconds": 300,
+    "health_stall_timeout_seconds": 600,
+    "health_warning_persist_threshold": 2,
+    "cpu_high_percent": 90,
+    "cpu_high_duration_seconds": 300
+  },
+  "memory": {
+    "wsl_resume_below_percent": 80,
+    "wsl_stop_admission_percent": 88,
+    "wsl_critical_percent": 90,
+    "windows_resume_below_percent": 80,
+    "windows_stop_admission_percent": 88,
+    "windows_critical_percent": 90,
+    "windows_reserve_mb": 3072,
+    "wsl_max_mb": 8192,
+    "wsl_swap_mb": 2048,
+    "cgroup_enabled": true,
+    "pressure_levels": {
+      "level1_percent": 70,
+      "level2_percent": 80,
+      "level3_percent": 85,
+      "level4_percent": 90
+    },
+    "concurrency_reduction": {
+      "level1": 0.7,
+      "level2": 0.4,
+      "level3": 0.1,
+      "level4": 0
+    },
+    "memory_cleanup": {
+      "level3_kill_count": 1,
+      "level4_kill_count": 2,
+      "kill_above_percent": 85,
+      "dry_run": false
+    },
+    "health_growth_window_seconds": 300,
+    "health_growth_mb": 200
+  },
+  "disk_recovery": {
+    "enabled": true,
+    "threshold_mb": 1024,
+    "archive_max_age_days": 30,
+    "failed_archive_max_age_days": 7,
+    "delete_completed_worktrees": true
+  },
+  "event_compress": {
+    "enabled": true,
+    "full_keep_days": 7,
+    "summary_start_days": 7,
+    "archive_after_days": 30,
+    "archive_dir": ".opencode/archives/events"
+  }
+}
+DEFAULTS
+  ) --slurpfile user <(cat "$config") '$defaults[0] * $user[0]'
+}

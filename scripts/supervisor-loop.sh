@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "$SCRIPT_DIR/common.sh"
-config="${1:?config}"; root="$(jq -r '.wsl.project_root' "$config")"; state="$root/.opencode/orchestrator-state.json"; tasks="$root/.opencode/tasks.json"; interval="$(jq -r '.scheduler.monitor_interval_seconds // 30' "$config")"
+config="${1:?config}"
+resolved_config="$("$SCRIPT_DIR/read-config.sh" "$config")"
+root="$(jq -r '.wsl.project_root' "$resolved_config")"; state="$root/.opencode/orchestrator-state.json"; tasks="$root/.opencode/tasks.json"; interval="$(jq -r '.scheduler.monitor_interval_seconds // 30' "$resolved_config")"
+orphan_scan_interval="$(jq -r '.scheduler.orphan_scan_interval // 5' "$resolved_config")"
+disk_recovery_interval="$(jq -r '.scheduler.disk_recovery_interval // 10' "$resolved_config")"
+event_compress_interval="$(jq -r '.scheduler.event_compress_interval // 100' "$resolved_config")"
+max_runtime="$(jq -r '.scheduler.max_task_runtime_seconds // 3600' "$resolved_config")"
+stall_timeout="$(jq -r '.scheduler.stall_timeout_seconds // 300' "$resolved_config")"
+health_stall_timeout="$(jq -r '.scheduler.health_stall_timeout_seconds // 600' "$resolved_config")"
+health_warning_persist_threshold="$(jq -r '.scheduler.health_warning_persist_threshold // 2' "$resolved_config")"
 mkdir -p "$root/.opencode"; exec 9>"$root/.opencode/supervisor.lock"; flock -n 9 || wsl_die "supervisor already running"
 trap 'exit 0' INT TERM
 "$SCRIPT_DIR/ensure-dependencies.sh"
 "$SCRIPT_DIR/ensure-opencode.sh" "$config"
-"$SCRIPT_DIR/runtime-preflight.sh" "$(jq -r '.wsl.project_root' "$config")" "$config"
-"$SCRIPT_DIR/preflight.sh" "$config"
-# Orphan process scanner
-scan_orphans() {
-  local state="$1" root="$2"
+"$SCRIPT_DIR/runtime-preflight.sh" "$(jq -r '.wsl.project_root' "$resolved_config")" "$resolved_config"
+"$SCRIPT_DIR/preflight.sh" "$resolved_config"
+# Orphan process scanner (V2.2: fixed JSON, config param, last_orphan_scan_at)
+invoke_orphan_process_scan() {
+  local state="$1" root="$2" config="$3"
   for record in "$root"/.opencode/processes/*.json; do
     [[ -f "$record" ]] || continue
     [[ "$(jq -r '.status // "running"' "$record")" == "running" ]] || continue
@@ -26,30 +35,92 @@ scan_orphans() {
           child_pid=$(echo "$child_pid" | tr -d ' ')
           [[ -n "$child_pid" ]] || continue
           kill -TERM "$child_pid" 2>/dev/null || true
-          wsl_append_event "$state" orphan-killed "$id" "{"pid":$child_pid}"
+          wsl_append_event "$state" orphan-killed "$id" "$(jq -cn --argjson pid "$child_pid" '{pid:$pid}')"
         done
       fi
     fi
     "$SCRIPT_DIR/process-manager.sh" stop "$state" "$id" >/dev/null || true
     wsl_append_event "$state" orphan-recovered "$id" '{"reason":"root-process-dead"}'
   done
+  tmp="$state.tmp.$$"; jq --arg ts "$(wsl_now)" '.last_orphan_scan_at = $ts' "$state" > "$tmp"; mv "$tmp" "$state"
+}
+# Health monitoring (V2.2: per-cycle snapshot, dead/stall/warning actions)
+get_process_health_state() {
+  local health_json="$1"
+  local status
+  status="$(jq -r '.status' "$health_json")"
+  local log_age
+  log_age="$(jq -r '.log_age_minutes' "$health_json")"
+  local stall_timeout_min
+  stall_timeout_min="$(awk "BEGIN {printf \"%.1f\", $health_stall_timeout / 60.0}")"
+  if [[ "$status" == "dead" ]]; then
+    echo "dead"
+  elif awk "BEGIN {exit !(${log_age} > ${stall_timeout_min})}" 2>/dev/null; then
+    echo "stall"
+  else
+    echo "alive"
+  fi
+}
+monitor_health() {
+  local state="$1" root="$2" health_warn_threshold="$3"
+  for record in "$root"/.opencode/processes/*.json; do
+    [[ -f "$record" ]] || continue
+    [[ "$(jq -r '.status // "running"' "$record")" == "running" ]] || continue
+    local id
+    id="$(jq -r '.task_id' "$record")"
+    local health_json
+    health_json="$("$SCRIPT_DIR/process-manager.sh" health "$state" "$id" 2>/dev/null || true)"
+    [[ -n "$health_json" ]] || continue
+    # Append to metrics/health.jsonl
+    local metrics_file="$root/.opencode/metrics/health.jsonl"
+    mkdir -p "$root/.opencode/metrics"
+    printf '%s\n' "$health_json" >> "$metrics_file"
+    # Evaluate health state
+    local hstate
+    hstate="$(get_process_health_state "$health_json")"
+    if [[ "$hstate" == "dead" ]]; then
+      wsl_append_event "$state" process_dead "$id" '{"reason":"process-exit"}'
+      "$SCRIPT_DIR/process-manager.sh" stop "$state" "$id" >/dev/null || true
+      "$SCRIPT_DIR/worktree-manager.sh" archive "$root" "$id" || true
+      "$SCRIPT_DIR/lease-manager.sh" release "$state" "$id"
+      wsl_remove_active_task "$state" "$id"
+      wsl_update_task_status "$tasks" "$id" blocked "process-dead"
+      tmp="$state.tmp.$$"; jq --arg id "$id" '.history += [{task_id:$id,status:"blocked",reason:"process-dead",at:(now|todateiso8601)}]' "$state" > "$tmp"; mv "$tmp" "$state"
+    elif [[ "$hstate" == "stall" ]]; then
+      wsl_append_event "$state" process_stall "$id" '{"reason":"no-output"}'
+    elif [[ "$hstate" == "warning" ]]; then
+      wsl_append_event "$state" health_warning "$id" '{"reason":"warning-detected"}'
+    fi
+  done
 }
 
 cycle_count=0
-orphan_scan_interval=$(jq -r '.scheduler.orphan_scan_interval // 5' "$config")
-
+last_orphan_scan_at=""
+last_disk_recovery_cycle=0
+last_event_compress_cycle=0
+# Startup: initial event compress
+if jq -e '.event_compress.enabled // true' <<< "$resolved_config" >/dev/null 2>&1; then
+  "$SCRIPT_DIR/event-store.sh" "$root" "$config" 2>/dev/null || true
+fi
+mkdir -p "$root/.opencode/metrics"
 while :; do
   cycle_count=$((cycle_count + 1))
+  # Periodic event compression
+  if (( cycle_count % event_compress_interval == 0 )); then
+    if jq -e '.event_compress.enabled // true' <<< "$resolved_config" >/dev/null 2>&1; then
+      "$SCRIPT_DIR/event-store.sh" "$root" "$config" 2>/dev/null || true
+    fi
+  fi
   # Periodic orphan scan
   if (( cycle_count % orphan_scan_interval == 0 )); then
-    scan_orphans "$state" "$root" 2>/dev/null || true
+    invoke_orphan_process_scan "$state" "$root" "$resolved_config" 2>/dev/null || true
   fi
-  if ! "$SCRIPT_DIR/admission-cycle.sh" "$config"; then
+  if ! "$SCRIPT_DIR/admission-cycle.sh" "$resolved_config"; then
     wsl_append_event "$state" supervisor-error _ '{"reason":"admission-cycle-failed"}'
     exit 1
   fi
   exec 8>"$state.lock"; flock -x 8
-  max_runtime="$(jq -r '.scheduler.max_task_runtime_seconds // 7200' "$config")"; stall_timeout="$(jq -r '.scheduler.stall_timeout_seconds // 600' "$config")"; now_epoch="$(date +%s)"
+  now_epoch="$(date +%s)"
   for record in "$root"/.opencode/processes/*.json; do
     [[ -f "$record" ]] || continue
     [[ "$(jq -r '.status // "running"' "$record")" == "running" ]] || continue
@@ -107,5 +178,11 @@ while :; do
     wsl_append_event "$state" task-finished "$id" "$(jq -cn --arg status "$status" --arg reason "$reason" --arg gate "$gate_file" '{status:$status,reason:$reason,gate:$gate}')"
   done
   exec 8>&-
+  # Health monitoring (every cycle)
+  monitor_health "$state" "$root" "$health_warning_persist_threshold" 2>/dev/null || true
+  # Periodic disk recovery
+  if (( cycle_count % disk_recovery_interval == 0 )); then
+    "$SCRIPT_DIR/worktree-manager.sh" disk-recovery "$root" "$config" 2>/dev/null || true
+  fi
   sleep "$interval"
 done

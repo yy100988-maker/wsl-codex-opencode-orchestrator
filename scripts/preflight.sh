@@ -9,7 +9,8 @@ if command -v opencode >/dev/null 2>&1; then
   opencode_path="$(readlink -f "$opencode_command" 2>/dev/null || true)"
   [[ -n "$opencode_path" ]] || add_error "opencode-path-unresolved:$opencode_command"
   [[ "$opencode_path" != /mnt/c/* && "$opencode_path" != /mnt/d/* ]] || add_error "windows-opencode-not-allowed:$opencode_path"
-  if grep -Eq '(/mnt/c|/mnt/d|powershell\.exe|cmd\.exe)' "$opencode_path" 2>/dev/null; then
+  elf_magic="$(head -c 4 "$opencode_path" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+  if [[ "$elf_magic" != "7f454c46" ]] && grep -Eq '(/mnt/c|/mnt/d|powershell\.exe|cmd\.exe)' "$opencode_path" 2>/dev/null; then
     add_error "windows-wrapper-not-allowed:$opencode_path"
   fi
 else

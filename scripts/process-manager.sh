@@ -3,7 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-usage() { printf 'usage: %s start <state> <task-id> <cwd> <command...> | stop|status <state> <task-id>\n' "$0" >&2; exit 2; }
+usage() { printf 'usage: %s start <state> <task-id> <cwd> <command...> | stop|status|health <state> <task-id>\n' "$0" >&2; exit 2; }
 
 state_file="$2"
 task_id="$3"
@@ -44,6 +44,71 @@ case "${1:-}" in
     ;;
   status)
     if [[ -f "$pid_file" ]]; then jq -c . "$pid_file"; else printf '{"status":"absent"}\n'; fi
+    ;;
+  health)
+    [[ -f "$pid_file" ]] || wsl_die "no process record for task $task_id"
+    pid="$(jq -r '.pid' "$pid_file")"
+    log_path="$(jq -r '.log // ""' "$pid_file")"
+    cwd="$(jq -r '.cwd // ""' "$pid_file")"
+
+    if kill -0 "$pid" 2>/dev/null; then
+      alive=1
+    else
+      alive=0
+    fi
+
+    if [[ "$alive" -eq 1 && -d "/proc/$pid" ]]; then
+      process_name="$(tr -d '\0' < "/proc/$pid/comm" 2>/dev/null || echo "unknown")"
+      vmrss_kb="$(awk '/^VmRSS:/ {print $2}' /proc/$pid/status 2>/dev/null || echo 0)"
+      memory_mb="$(awk "BEGIN {printf \"%.1f\", ${vmrss_kb:-0} / 1024.0}")"
+      cpu_raw="$(ps -o cputime= -p "$pid" 2>/dev/null | tr -d ' ' || echo "0:00.00")"
+      cpu_min="${cpu_raw%%:*}"
+      cpu_sec="${cpu_raw#*:}"
+      if [[ "$cpu_sec" == *.* ]]; then
+        cpu_sec_int="${cpu_sec%%.*}"
+        cpu_sec_frac="${cpu_sec#*.}"
+      else
+        cpu_sec_int="$cpu_sec"
+        cpu_sec_frac="00"
+      fi
+      cpu_seconds="$(awk "BEGIN {printf \"%.1f\", ${cpu_min:-0} * 60 + ${cpu_sec_int:-0} + ${cpu_sec_frac:-0} / 100.0}")"
+    else
+      process_name="unknown"
+      memory_mb="0.0"
+      cpu_seconds="0.0"
+    fi
+
+    log_age_minutes="0.0"
+    if [[ -n "$log_path" && -f "$log_path" ]]; then
+      log_mtime="$(stat -c %Y "$log_path" 2>/dev/null || echo 0)"
+      now_ts="$(date +%s)"
+      log_age_minutes="$(awk "BEGIN {printf \"%.1f\", (${now_ts:-0} - ${log_mtime:-0}) / 60.0}")"
+    fi
+
+    if [[ "$alive" -eq 0 ]]; then
+      health_status="dead"
+      status_detail="null"
+    elif [[ "$log_age_minutes" != "0.0" ]] && awk "BEGIN {exit !(${log_age_minutes} > 10)}" 2>/dev/null; then
+      health_status="stall"
+      status_detail="null"
+    else
+      health_status="alive"
+      status_detail="null"
+    fi
+
+    jq -cn \
+      --arg task_id "$task_id" \
+      --argjson pid "$pid" \
+      --arg process_name "$process_name" \
+      --arg status "$health_status" \
+      --argjson status_detail "$status_detail" \
+      --argjson memory_mb "$memory_mb" \
+      --argjson cpu_seconds "$cpu_seconds" \
+      --arg log_path "$log_path" \
+      --argjson log_age_minutes "$log_age_minutes" \
+      --arg cwd "$cwd" \
+      --arg sampled_at "$(wsl_now)" \
+      '{task_id:$task_id,pid:$pid,process_name:$process_name,status:$status,status_detail:$status_detail,memory_mb:$memory_mb,cpu_seconds:$cpu_seconds,log_path:$log_path,log_age_minutes:$log_age_minutes,cwd:$cwd,sampled_at:$sampled_at}'
     ;;
   *) usage ;;
 esac
