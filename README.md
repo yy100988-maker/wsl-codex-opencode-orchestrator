@@ -1,5 +1,7 @@
 # WSL Codex OpenCode Orchestrator
 
+> 当前版本：V0.1.2
+
 在 Windows 主机上，由 Codex 作为主控 agent，在指定 WSL2 发行版中调度多个 OpenCode 子 agent，按文件边界并行开发、分段测试、合并结果，并自动回收进程组、worktree 和租约。
 
 本项目适合以下场景：
@@ -8,7 +10,8 @@
 - Codex 负责任务拆解、任务图、最小化 prompt、监督、验收和合并。
 - WSL 内 OpenCode 每次只执行一个边界清晰的实现任务。
 - 测试 agent 只读验收，不修改业务代码。
-- 任务数量较多，但需要受 WSL 和 Windows 主机内存限制。
+- 任务数量较多（超过 6 个任务），需要受 WSL 和 Windows 主机内存限制。
+- 任务数量 <= 6 的小项目由主控直接编码，不走调度流程。
 
 > 当前版本是 WSL2 运行时技能，不替换 Windows 原生版本。
 
@@ -43,10 +46,11 @@ flowchart LR
 
 ## 核心特性
 
-- **主控职责固定**：Codex 规划、监督、Gate 验收、合并和清理；OpenCode 不负责拆解任务。
+- **智能路由**：任务数量 <= 6 时主控直接编码；超过 6 个时进入任务拆分、子 agent 调度、Gate 验收流程。
+- **主控职责固定（调度模式）**：Codex 规划、监督、Gate 验收、合并和清理；OpenCode 不负责拆解任务。
 - **文件边界并行**：通过 `allowed_files` 和 Lease 防止两个实现 agent 同时修改同一文件。
 - **双层内存保护**：同时检查 WSL 内存和 Windows 主机内存，任一侧达到停止阈值就暂停新增任务。
-- **模型回退**：优先使用 `opencode-go/mimo-v2.5`，启动失败时只回退一次到 `opencode-go/hy3`。
+- **模型回退**：OpenCode 模式优先使用 `opencode-go/mimo-v2.5`，启动失败时只回退一次到 `opencode-go/hy3`；Grok CLI 模式默认 `grok-4.6`，回退 `mimo-v25`，路径由 `grok.grok_path` 配置。
 - **自动依赖补齐**：启动时自动安装固定白名单中的 Ubuntu 系统包；不自动修改 OpenCode 认证和模型配置。
 - **快速资源回收**：Supervisor 默认每 30 秒检查一次已完成任务并释放进程、worktree 和 Lease。
 - **分段验收**：要求 handoff、文件范围、任务测试和 Gate 结果全部满足后才允许合并。
