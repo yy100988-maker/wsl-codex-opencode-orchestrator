@@ -1,6 +1,6 @@
 ---
 name: wsl-codex-opencode-orchestrator
-version: 0.1.1
+version: 0.1.2
 description: 在 Windows 上通过指定 WSL2 发行版运行 Linux OpenCode 子 agent 的多任务开发编排技能。当前平台主控 Agent 负责完成任务拆解、最小 prompt、并行调度、分段验收、状态恢复和资源清理。
 metadata:
   requires:
@@ -173,7 +173,8 @@ WSL 版本支持两种 agent provider：OpenCode 和 xAI Grok CLI。
   },
   "models": {
     "implementation": "opencode-go/mimo-v2.5",
-    "fallback": "opencode-go/hy3"
+    "fallback": "opencode-go/hy3",
+    "last_resort": "opencode-go/hy3"
   }
 }
 ```
@@ -190,7 +191,8 @@ WSL 版本支持两种 agent provider：OpenCode 和 xAI Grok CLI。
   },
   "models": {
     "implementation": "grok-4.6",
-    "fallback": "mimo-v25"
+    "fallback": "mimo-v25",
+    "last_resort": "big-pickle"
   }
 }
 ```
@@ -199,6 +201,7 @@ WSL 版本支持两种 agent provider：OpenCode 和 xAI Grok CLI。
 
 - 主模型：`opencode-go/mimo-v2.5`。
 - 备用模型：`opencode-go/hy3`。
+- 兜底模型：`opencode-go/hy3`（可配置为任何可用模型）。
 - 命令格式：`opencode run --model <model> --format json --file <prompt>`
 
 ### Grok CLI 模式
@@ -207,14 +210,16 @@ WSL 版本支持两种 agent provider：OpenCode 和 xAI Grok CLI。
 - 命令格式：`grok --cwd <worktree> --prompt-file <prompt> --model <model> --output-format json --no-subagents --permission-mode auto --max-turns 30`
 - 注意：主命令是 `grok`，不是 `grok agent`。`grok agent` 是子命令，选项不同。
 - Grok CLI 使用自身模型和配置，不套用 OpenCode 的模型回退规则。
+- 兜底模型默认 `big-pickle`，通过 `models.last_resort` 配置。
 - 启动前必须验证：`grok --version` 且 `grok models` 输出中包含配置的模型名。
 
 ### 回退规则
 
-- 主模型发生模型不存在、provider 不可用或启动即失败时，只回退一次。
-- 备用模型失败后进入有限重试或 `blocked`，禁止无限创建进程。
+- 主模型发生模型不存在、provider 不可用或启动即失败时，回退一次到备用模型。
+- 备用模型失败后，回退一次到兜底模型（`models.last_resort`，Grok 模式推荐 `big-pickle`）。
+- 兜底模型失败后进入有限重试或 `blocked`，禁止无限创建进程。
 - 回退事件必须写入 `task-graph.jsonl`。
-- 模型探测：启动子 agent 前，主控必须通过 `grok models`（Grok 模式）或 `opencode models`（OpenCode 模式）获取可用模型列表，验证配置的 `implementation` 和 `fallback` 模型名是否存在于列表中。不存在的模型必须在启动前替换为列表中最接近的可用模型，并记录替换事件。
+- 模型探测：启动子 agent 前，主控必须通过 `grok models`（Grok 模式）或 `opencode models`（OpenCode 模式）获取可用模型列表，验证配置的 `implementation`、`fallback` 和 `last_resort`（若配置）模型名是否存在于列表中。不存在的模型必须在启动前替换为列表中最接近的可用模型，并记录替换事件。
 
 ## 7. 30 秒资源监控
 

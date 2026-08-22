@@ -242,12 +242,17 @@ while IFS= read -r task && (( slots > 0 )); do
   fi
   rm -f "$wt/.opencode-handoff.json" "$wt/.opencode-task-prompt.md"
   cp "$prompt" "$wt/.opencode-task-prompt.md"
-  model="$(jq -r '.models.implementation' "$config")"; fallback="$(jq -r '.models.fallback' "$config")"; started=false
+  model="$(jq -r '.models.implementation' "$config")"; fallback="$(jq -r '.models.fallback' "$config")"; last_resort="$(jq -r '.models.last_resort // ""' "$config")"; started=false
   task_msg="$(cat "$wt/.opencode-task-prompt.md")"
   command=(opencode run --model "$model" --message "$task_msg")
   if "$SCRIPT_DIR/process-manager.sh" start "$state" "$id" "$wt" "${command[@]}" >/dev/null; then started=true; else
     wsl_append_event "$state" model-fallback "$id" "$(jq -cn --arg from "$model" --arg to "$fallback" '{from:$from,to:$to,reason:"primary-start-failed"}')"; model="$fallback"; command=(opencode run --model "$model" --message "$task_msg")
-    "$SCRIPT_DIR/process-manager.sh" start "$state" "$id" "$wt" "${command[@]}" >/dev/null && started=true || true
+    if "$SCRIPT_DIR/process-manager.sh" start "$state" "$id" "$wt" "${command[@]}" >/dev/null; then
+      started=true
+    elif [[ -n "$last_resort" ]]; then
+      wsl_append_event "$state" model-fallback "$id" "$(jq -cn --arg from "$model" --arg to "$last_resort" '{from:$from,to:$to,reason:"fallback-start-failed"}')"; model="$last_resort"; command=(opencode run --model "$model" --message "$task_msg")
+      "$SCRIPT_DIR/process-manager.sh" start "$state" "$id" "$wt" "${command[@]}" >/dev/null && started=true || true
+    fi
   fi
   if [[ "$started" != true ]]; then
     "$SCRIPT_DIR/worktree-manager.sh" archive "$root" "$id" || true; "$SCRIPT_DIR/lease-manager.sh" release "$state" "$id"; wsl_update_task_status "$tasks" "$id" blocked "opencode-start-failed"; wsl_append_event "$state" task-blocked "$id" '{"reason":"opencode-start-failed"}'; continue
