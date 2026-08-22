@@ -25,13 +25,13 @@ metadata:
 
 ### 当前平台主控 Agent
 
-- **只负责调度，不负责写代码。** 主控 agent 绝对不能直接读取业务源文件、不能直接创建或修改业务代码文件。代码实现必须由子 agent 完成。
+- **默认只负责调度，不负责写代码。** 代码实现由子 agent 完成。但任务数 <= 6 的小项目走直接编码模式（见第 2.1 节），此时主控可直接实现业务代码。
 - 完整读取需求和设计文档一次。
 - 建立知识库、项目记忆、任务图和文件映射。
 - 拆分任务、生成 `tasks.json` 和每个任务的最小 prompt。
 - 通过调度脚本（`admission-cycle.sh`）启动 WSL Supervisor/OpenCode，而不是自己执行开发任务。
 - 执行 Gate 验收、合并任务分支、清理资源和生成报告。
-- **禁止事项：** 主控 agent 禁止直接读写 `.js`、`.ts`、`.py`、`.vue` 等业务源文件。发现违规必须立即停止，改为将任务分发给子 agent。
+- **禁止事项（调度模式）：** 主控 agent 禁止直接读写 `.js`、`.ts`、`.py`、`.vue` 等业务源文件。发现违规必须立即停止，改为将任务分发给子 agent。直接编码模式不受此限制。
 
 ### WSL Supervisor
 
@@ -50,6 +50,33 @@ metadata:
 - 只读执行 Scope、Handoff、Static、Unit、Contract、Integration 和 Security 验收。
 - 不修改业务代码、不提交业务分支。
 - `handoff.completed` 不等于最终完成，必须以 Gate 结果为准。
+
+
+### 2.1 智能路由
+
+主控在完成需求和设计文档扫描后，必须按以下规则决定开发模式：
+
+| 任务数 | 模式 | 说明 |
+|--------|------|------|
+| <= 6 | 直接编码 | 主控直接按设计文档编写代码和测试，不走调度流程 |
+| > 6 | 调度模式 | 按本技能全部规则执行任务拆分、prompt 生成、WSL 子 agent 调度、Gate 验收和清理 |
+
+**直接编码模式（任务数 <= 6）：**
+
+- 主控直接读取设计文档、编写业务代码、生成测试并运行验证。
+- 不创建 `tasks.json`、不生成子任务 prompt、不启动 Supervisor、不用 `admission-cycle.sh`。
+- 可用简化状态记录：`.opencode/direct-mode.json`，记录 `project_root`、`mode`、`started_at`、`completed_at`。
+- 完成后仍需生成 `开发完成报告.md` 和 `测试验收报告.md`。
+- 任务数按设计文档中的功能模块计数：每个独立功能/模块计 1 个任务；测试文件不计入任务数，但与对应功能一起实现。
+
+**调度模式（任务数 > 6）：**
+
+- 按第 2 节、第 4-11 节全部规则执行。
+
+**路由边界规则：**
+
+- 任务数以主控完成设计文档扫描后的计数为准，不允许刻意拆分/合并任务来改变路由结果。
+- 如果执行过程中发现任务数超出直接编码上限，必须停止直接编码，切换为调度模式。
 
 ## 3. 文档加载和 Token 策略
 
@@ -157,9 +184,12 @@ WSL 版本支持两种 agent provider：OpenCode 和 xAI Grok CLI。
   "agent": {
     "provider": "grok"
   },
+  "grok": {
+    "grok_path": "C:\\Users\\<user>\\AppData\\Local\\Programs\\grok\\grok.exe"
+  },
   "models": {
-    "implementation": "grok-4",
-    "fallback": "grok-4"
+    "implementation": "grok-4.6",
+    "fallback": "mimo-v25"
   }
 }
 ```
@@ -172,15 +202,18 @@ WSL 版本支持两种 agent provider：OpenCode 和 xAI Grok CLI。
 
 ### Grok CLI 模式
 
-- 需要在 WSL 中安装 grok wrapper：`~/bin/grok` 指向 `/mnt/d/Program Files/grok/grok.exe`。
-- 命令格式：`grok agent --cwd <worktree> --prompt-file <prompt> --model <model> --output-format streaming-json --no-subagents --permission-mode auto --max-turns 30`
+- Grok CLI 是 Windows 原生程序，安装路径通过 `.opencode/wsl-config.json` 中的 `grok.grok_path` 配置（不写死在 SKILL 中）。WSL 内通过 `grok.exe` 或包装脚本调用。
+- 命令格式：`grok --cwd <worktree> --prompt-file <prompt> --model <model> --output-format json --no-subagents --permission-mode auto --max-turns 30`
+- 注意：主命令是 `grok`，不是 `grok agent`。`grok agent` 是子命令，选项不同。
 - Grok CLI 使用自身模型和配置，不套用 OpenCode 的模型回退规则。
+- 启动前必须验证：`grok --version` 且 `grok models` 输出中包含配置的模型名。
 
 ### 回退规则
 
 - 主模型发生模型不存在、provider 不可用或启动即失败时，只回退一次。
 - 备用模型失败后进入有限重试或 `blocked`，禁止无限创建进程。
 - 回退事件必须写入 `task-graph.jsonl`。
+- 模型探测：启动子 agent 前，主控必须通过 `grok models`（Grok 模式）或 `opencode models`（OpenCode 模式）获取可用模型列表，验证配置的 `implementation` 和 `fallback` 模型名是否存在于列表中。不存在的模型必须在启动前替换为列表中最接近的可用模型，并记录替换事件。
 
 ## 7. 30 秒资源监控
 
