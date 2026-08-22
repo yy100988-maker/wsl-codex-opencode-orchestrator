@@ -1,6 +1,6 @@
 # WSL Codex OpenCode Orchestrator
 
-> 当前版本：V0.1.2
+> 当前版本：V0.1.1
 
 在 Windows 主机上，由 Codex 作为主控 agent，在指定 WSL2 发行版中调度多个 OpenCode 子 agent，按文件边界并行开发、分段测试、合并结果，并自动回收进程组、worktree 和租约。
 
