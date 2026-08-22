@@ -1,5 +1,6 @@
 ---
 name: wsl-codex-opencode-orchestrator
+version: 0.1.0
 description: 在 Windows 上通过指定 WSL2 发行版运行 Linux OpenCode 子 agent 的多任务开发编排技能。当前平台主控 Agent 负责完成任务拆解、最小 prompt、并行调度、分段验收、状态恢复和资源清理。
 metadata:
   requires:
